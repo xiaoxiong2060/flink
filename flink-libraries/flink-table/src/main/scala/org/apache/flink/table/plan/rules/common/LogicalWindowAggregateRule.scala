@@ -40,7 +40,6 @@ abstract class LogicalWindowAggregateRule(ruleName: String)
   override def matches(call: RelOptRuleCall): Boolean = {
     val agg = call.rel(0).asInstanceOf[LogicalAggregate]
 
-    val distinctAggs = agg.getAggCallList.exists(_.isDistinct)
     val groupSets = agg.getGroupSets.size() != 1 || agg.getGroupSets.get(0) != agg.getGroupSet
 
     val windowExpressions = getWindowExpressions(agg)
@@ -48,7 +47,7 @@ abstract class LogicalWindowAggregateRule(ruleName: String)
       throw new TableException("Only a single window group function may be used in GROUP BY")
     }
 
-    !distinctAggs && !groupSets && !agg.indicator && windowExpressions.nonEmpty
+    !groupSets && !agg.indicator && windowExpressions.nonEmpty
   }
 
   /**
@@ -115,19 +114,19 @@ abstract class LogicalWindowAggregateRule(ruleName: String)
               if (call.getOperands.size() == 2) {
                 true
               } else {
-                throw TableException("TUMBLE window with alignment is not supported yet.")
+                throw new TableException("TUMBLE window with alignment is not supported yet.")
               }
             case BasicOperatorTable.HOP =>
               if (call.getOperands.size() == 3) {
                 true
               } else {
-                throw TableException("HOP window with alignment is not supported yet.")
+                throw new TableException("HOP window with alignment is not supported yet.")
               }
             case BasicOperatorTable.SESSION =>
               if (call.getOperands.size() == 2) {
                 true
               } else {
-                throw TableException("SESSION window with alignment is not supported yet.")
+                throw new TableException("SESSION window with alignment is not supported yet.")
               }
             case _ => false
           }

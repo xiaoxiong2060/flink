@@ -49,8 +49,7 @@ import static org.mockito.Mockito.when;
 /**
  * Unit test base class for subclasses of {@link AbstractMetricsHandler}.
  */
-public abstract class MetricsHandlerTestBase<T extends
-	AbstractMetricsHandler> extends TestLogger {
+public abstract class MetricsHandlerTestBase<T extends AbstractMetricsHandler> extends TestLogger {
 
 	private static final String TEST_METRIC_NAME = "test_counter";
 

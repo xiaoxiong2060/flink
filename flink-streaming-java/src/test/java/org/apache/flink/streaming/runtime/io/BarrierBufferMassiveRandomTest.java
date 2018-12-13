@@ -32,6 +32,7 @@ import org.apache.flink.runtime.io.network.partition.consumer.InputGateListener;
 import org.junit.Test;
 
 import java.io.IOException;
+import java.util.Optional;
 import java.util.Random;
 
 import static org.junit.Assert.fail;
@@ -62,12 +63,12 @@ public class BarrierBufferMassiveRandomTest {
 					new BufferPool[] { pool1, pool2 },
 					new BarrierGenerator[] { new CountBarrier(100000), new RandomBarrier(100000) });
 
-			BarrierBuffer barrierBuffer = new BarrierBuffer(myIG, ioMan);
+			BarrierBuffer barrierBuffer = new BarrierBuffer(myIG, new BufferSpiller(ioMan, myIG.getPageSize()));
 
 			for (int i = 0; i < 2000000; i++) {
 				BufferOrEvent boe = barrierBuffer.getNextNonBlocked();
 				if (boe.isBuffer()) {
-					boe.getBuffer().recycle();
+					boe.getBuffer().recycleBuffer();
 				}
 			}
 		}
@@ -131,23 +132,35 @@ public class BarrierBufferMassiveRandomTest {
 
 	private static class RandomGeneratingInputGate implements InputGate {
 
-		private final int numChannels;
+		private final int numberOfChannels;
 		private final BufferPool[] bufferPools;
 		private final int[] currentBarriers;
 		private final BarrierGenerator[] barrierGens;
 		private int currentChannel = 0;
 		private long c = 0;
 
+		private final String owningTaskName;
+
 		public RandomGeneratingInputGate(BufferPool[] bufferPools, BarrierGenerator[] barrierGens) {
-			this.numChannels = bufferPools.length;
-			this.currentBarriers = new int[numChannels];
+			this(bufferPools, barrierGens, "TestTask");
+		}
+
+		public RandomGeneratingInputGate(BufferPool[] bufferPools, BarrierGenerator[] barrierGens, String owningTaskName) {
+			this.numberOfChannels = bufferPools.length;
+			this.currentBarriers = new int[numberOfChannels];
 			this.bufferPools = bufferPools;
 			this.barrierGens = barrierGens;
+			this.owningTaskName = owningTaskName;
 		}
 
 		@Override
 		public int getNumberOfInputChannels() {
-			return numChannels;
+			return numberOfChannels;
+		}
+
+		@Override
+		public String getOwningTaskName() {
+			return owningTaskName;
 		}
 
 		@Override
@@ -159,18 +172,27 @@ public class BarrierBufferMassiveRandomTest {
 		public void requestPartitions() {}
 
 		@Override
-		public BufferOrEvent getNextBufferOrEvent() throws IOException, InterruptedException {
-			currentChannel = (currentChannel + 1) % numChannels;
+		public Optional<BufferOrEvent> getNextBufferOrEvent() throws IOException, InterruptedException {
+			currentChannel = (currentChannel + 1) % numberOfChannels;
 
 			if (barrierGens[currentChannel].isNextBarrier()) {
-				return new BufferOrEvent(
-						new CheckpointBarrier(++currentBarriers[currentChannel], System.currentTimeMillis(), CheckpointOptions.forCheckpoint()),
-							currentChannel);
+				return Optional.of(
+					new BufferOrEvent(
+						new CheckpointBarrier(
+							++currentBarriers[currentChannel],
+							System.currentTimeMillis(),
+							CheckpointOptions.forCheckpointWithDefaultLocation()),
+						currentChannel));
 			} else {
 				Buffer buffer = bufferPools[currentChannel].requestBuffer();
 				buffer.getMemorySegment().putLong(0, c++);
-				return new BufferOrEvent(buffer, currentChannel);
+				return Optional.of(new BufferOrEvent(buffer, currentChannel));
 			}
+		}
+
+		@Override
+		public Optional<BufferOrEvent> pollNextBufferOrEvent() throws IOException, InterruptedException {
+			return getNextBufferOrEvent();
 		}
 
 		@Override

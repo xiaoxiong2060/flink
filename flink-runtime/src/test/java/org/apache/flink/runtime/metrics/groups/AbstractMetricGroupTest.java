@@ -44,7 +44,7 @@ public class AbstractMetricGroupTest {
 	 * called and the parent is null.
 	 */
 	@Test
-	public void testGetAllVariables() {
+	public void testGetAllVariables() throws Exception {
 		MetricRegistryImpl registry = new MetricRegistryImpl(MetricRegistryConfiguration.defaultMetricRegistryConfiguration());
 
 		AbstractMetricGroup group = new AbstractMetricGroup<AbstractMetricGroup<?>>(registry, new String[0], null) {
@@ -60,7 +60,7 @@ public class AbstractMetricGroupTest {
 		};
 		assertTrue(group.getAllVariables().isEmpty());
 
-		registry.shutdown();
+		registry.shutdown().get();
 	}
 
 	// ========================================================================
@@ -101,7 +101,31 @@ public class AbstractMetricGroupTest {
 				}
 			}
 		} finally {
-			testRegistry.shutdown();
+			testRegistry.shutdown().get();
+		}
+	}
+
+	@Test
+	public void testLogicalScopeCachingForMultipleReporters() throws Exception {
+		Configuration config = new Configuration();
+		config.setString(ConfigConstants.METRICS_REPORTER_PREFIX + "test1." + ConfigConstants.METRICS_REPORTER_CLASS_SUFFIX, LogicalScopeReporter1.class.getName());
+		config.setString(ConfigConstants.METRICS_REPORTER_PREFIX + "test2." + ConfigConstants.METRICS_REPORTER_CLASS_SUFFIX, LogicalScopeReporter2.class.getName());
+
+		MetricRegistryImpl testRegistry = new MetricRegistryImpl(MetricRegistryConfiguration.fromConfiguration(config));
+		try {
+			MetricGroup tmGroup = new TaskManagerMetricGroup(testRegistry, "host", "id")
+				.addGroup("B")
+				.addGroup("C");
+			tmGroup.counter("1");
+			assertEquals("Reporters were not properly instantiated", 2, testRegistry.getReporters().size());
+			for (MetricReporter reporter : testRegistry.getReporters()) {
+				ScopeCheckingTestReporter typedReporter = (ScopeCheckingTestReporter) reporter;
+				if (typedReporter.failureCause != null) {
+					throw typedReporter.failureCause;
+				}
+			}
+		} finally {
+			testRegistry.shutdown().get();
 		}
 	}
 
@@ -175,8 +199,40 @@ public class AbstractMetricGroupTest {
 		}
 	}
 
+	/**
+	 * Reporter that verifies the logical-scope caching behavior.
+	 */
+	public static final class LogicalScopeReporter1 extends ScopeCheckingTestReporter {
+		@Override
+		public String filterCharacters(String input) {
+			return FILTER_B.filterCharacters(input);
+		}
+
+		@Override
+		public void checkScopes(Metric metric, String metricName, MetricGroup group) {
+			final String logicalScope = ((FrontMetricGroup<AbstractMetricGroup<?>>) group).getLogicalScope(this, '-');
+			assertEquals("taskmanager-X-C", logicalScope);
+		}
+	}
+
+	/**
+	 * Reporter that verifies the logical-scope caching behavior.
+	 */
+	public static final class LogicalScopeReporter2 extends ScopeCheckingTestReporter {
+		@Override
+		public String filterCharacters(String input) {
+			return FILTER_C.filterCharacters(input);
+		}
+
+		@Override
+		public void checkScopes(Metric metric, String metricName, MetricGroup group) {
+			final String logicalScope = ((FrontMetricGroup<AbstractMetricGroup<?>>) group).getLogicalScope(this, ',');
+			assertEquals("taskmanager,B,X", logicalScope);
+		}
+	}
+
 	@Test
-	public void testScopeGenerationWithoutReporters() {
+	public void testScopeGenerationWithoutReporters() throws Exception {
 		Configuration config = new Configuration();
 		config.setString(MetricOptions.SCOPE_NAMING_TM, "A.B.C.D");
 		MetricRegistryImpl testRegistry = new MetricRegistryImpl(MetricRegistryConfiguration.fromConfiguration(config));
@@ -193,7 +249,7 @@ public class AbstractMetricGroupTest {
 			assertEquals("A.X.C.D.1", group.getMetricIdentifier("1", FILTER_B, -1));
 			assertEquals("A.X.C.D.1", group.getMetricIdentifier("1", FILTER_B, 2));
 		} finally {
-			testRegistry.shutdown();
+			testRegistry.shutdown().get();
 		}
 	}
 }

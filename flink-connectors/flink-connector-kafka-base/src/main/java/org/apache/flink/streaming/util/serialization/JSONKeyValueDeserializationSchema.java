@@ -17,6 +17,7 @@
 
 package org.apache.flink.streaming.util.serialization;
 
+import org.apache.flink.annotation.PublicEvolving;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
@@ -37,7 +38,11 @@ import static org.apache.flink.api.java.typeutils.TypeExtractor.getForClass;
  * <p>Metadata fields can be accessed by calling objectNode.get("metadata").get(&lt;name>).as(&lt;type>) and include
  * the "offset" (long), "topic" (String) and "partition" (int).
  */
+@PublicEvolving
 public class JSONKeyValueDeserializationSchema implements KeyedDeserializationSchema<ObjectNode> {
+
+	private static final long serialVersionUID = 1509391548173891955L;
+
 	private final boolean includeMetadata;
 	private ObjectMapper mapper;
 
@@ -51,8 +56,12 @@ public class JSONKeyValueDeserializationSchema implements KeyedDeserializationSc
 			mapper = new ObjectMapper();
 		}
 		ObjectNode node = mapper.createObjectNode();
-		node.set("key", mapper.readValue(messageKey, JsonNode.class));
-		node.set("value", mapper.readValue(message, JsonNode.class));
+		if (messageKey != null) {
+			node.set("key", mapper.readValue(messageKey, JsonNode.class));
+		}
+		if (message != null) {
+			node.set("value", mapper.readValue(message, JsonNode.class));
+		}
 		if (includeMetadata) {
 			node.putObject("metadata")
 				.put("offset", offset)

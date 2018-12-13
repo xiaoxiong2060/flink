@@ -20,7 +20,7 @@ package org.apache.flink.runtime.minicluster
 
 import java.net.{URL, URLClassLoader}
 import java.util.UUID
-import java.util.concurrent.{Executors, TimeUnit}
+import java.util.concurrent.{CompletableFuture, Executors, TimeUnit}
 
 import akka.pattern.Patterns.gracefulStop
 import akka.pattern.ask
@@ -49,6 +49,7 @@ import org.slf4j.LoggerFactory
 
 import scala.concurrent.duration.{Duration, FiniteDuration}
 import scala.concurrent._
+import scala.util.{Failure, Success}
 
 /**
  * Abstract base class for Flink's mini cluster. The mini cluster starts a
@@ -64,7 +65,8 @@ abstract class FlinkMiniCluster(
     val userConfiguration: Configuration,
     val highAvailabilityServices: HighAvailabilityServices,
     val useSingleActorSystem: Boolean)
-  extends LeaderRetrievalListener {
+  extends LeaderRetrievalListener
+  with JobExecutorService {
 
   protected val LOG = LoggerFactory.getLogger(classOf[FlinkMiniCluster])
 
@@ -447,6 +449,13 @@ abstract class FlinkMiniCluster(
       ioExecutor)
   }
 
+  def firstActorSystem(): Option[ActorSystem] = {
+    jobManagerActorSystems match {
+      case Some(jmActorSystems) => Some(jmActorSystems.head)
+      case None => None
+    }
+  }
+
   protected def startInternalShutdown(): Unit = {
     webMonitor foreach {
       _.stop()
@@ -467,34 +476,34 @@ abstract class FlinkMiniCluster(
 
     Await.ready(Future.sequence(jmFutures ++ tmFutures ++ rmFutures), timeout)
 
-    metricRegistryOpt.foreach(_.shutdown())
+    metricRegistryOpt.foreach(_.shutdown().get())
 
     if (!useSingleActorSystem) {
       taskManagerActorSystems foreach {
-        _ foreach(_.shutdown())
+        _ foreach(_.terminate())
       }
 
       resourceManagerActorSystems foreach {
-        _ foreach(_.shutdown())
+        _ foreach(_.terminate())
       }
     }
 
     jobManagerActorSystems foreach {
-      _ foreach(_.shutdown())
+      _ foreach(_.terminate())
     }
   }
 
   def awaitTermination(): Unit = {
     jobManagerActorSystems foreach {
-      _ foreach(_.awaitTermination())
+      _ foreach(s => Await.ready(s.whenTerminated, Duration.Inf))
     }
 
     resourceManagerActorSystems foreach {
-      _ foreach(_.awaitTermination())
+      _ foreach(s => Await.ready(s.whenTerminated, Duration.Inf))
     }
 
     taskManagerActorSystems foreach {
-      _ foreach(_.awaitTermination())
+      _ foreach(s => Await.ready(s.whenTerminated, Duration.Inf))
     }
   }
 
@@ -617,7 +626,10 @@ abstract class FlinkMiniCluster(
 
   def shutdownJobClientActorSystem(actorSystem: ActorSystem): Unit = {
     if(!useSingleActorSystem) {
-      actorSystem.shutdown()
+      actorSystem.terminate().onComplete {
+        case Success(_) =>
+        case Failure(t) => LOG.warn("Could not cleanly shut down the job client actor system.", t)
+      }
     }
   }
 
@@ -700,5 +712,26 @@ abstract class FlinkMiniCluster(
     }
 
     FlinkUserCodeClassLoaders.parentFirst(urls, parentClassLoader)
+  }
+
+  /**
+    * Run the given job and block until its execution result can be returned.
+    *
+    * @param jobGraph to execute
+    * @return Execution result of the executed job
+    * @throws JobExecutionException if the job failed to execute
+    */
+  override def executeJobBlocking(jobGraph: JobGraph) = {
+    submitJobAndWait(jobGraph, false)
+  }
+
+  override def closeAsync() = {
+    try {
+      stop()
+      CompletableFuture.completedFuture(null)
+    } catch {
+      case e: Exception =>
+        FutureUtils.completedExceptionally(e)
+    }
   }
 }

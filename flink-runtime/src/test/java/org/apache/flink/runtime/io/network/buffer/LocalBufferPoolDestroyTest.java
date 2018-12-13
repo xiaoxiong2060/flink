@@ -26,6 +26,9 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+/**
+ * Tests for the destruction of a {@link LocalBufferPool}.
+ */
 public class LocalBufferPoolDestroyTest {
 
 	/**
@@ -104,11 +107,10 @@ public class LocalBufferPoolDestroyTest {
 	 * @return Flag indicating whether the Thread is in a blocking buffer
 	 * request or not
 	 */
-	private boolean isInBlockingBufferRequest(StackTraceElement[] stackTrace) {
+	public static boolean isInBlockingBufferRequest(StackTraceElement[] stackTrace) {
 		if (stackTrace.length >= 3) {
 			return stackTrace[0].getMethodName().equals("wait") &&
-					stackTrace[1].getMethodName().equals("requestBuffer") &&
-					stackTrace[2].getMethodName().equals("requestBufferBlocking");
+					stackTrace[1].getClassName().equals(LocalBufferPool.class.getName());
 		} else {
 			return false;
 		}

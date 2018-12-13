@@ -17,18 +17,20 @@
  */
 package org.apache.flink.table.codegen.calls
 
+import java.math.MathContext
+
 import org.apache.calcite.avatica.util.DateTimeUtils.MILLIS_PER_DAY
 import org.apache.calcite.avatica.util.{DateTimeUtils, TimeUnitRange}
 import org.apache.calcite.util.BuiltInMethod
 import org.apache.flink.api.common.typeinfo.BasicTypeInfo._
 import org.apache.flink.api.common.typeinfo._
-import org.apache.flink.api.common.typeutils.CompositeType
 import org.apache.flink.api.java.typeutils.{MapTypeInfo, ObjectArrayTypeInfo, RowTypeInfo}
+import org.apache.flink.table.api.TableConfig
 import org.apache.flink.table.codegen.CodeGenUtils._
 import org.apache.flink.table.codegen.calls.CallGenerator.generateCallIfArgsNotNull
 import org.apache.flink.table.codegen.{CodeGenException, CodeGenerator, GeneratedExpression}
-import org.apache.flink.table.typeutils.{TimeIndicatorTypeInfo, TimeIntervalTypeInfo, TypeCoercion}
 import org.apache.flink.table.typeutils.TypeCheckUtils._
+import org.apache.flink.table.typeutils.{TimeIndicatorTypeInfo, TimeIntervalTypeInfo, TypeCoercion}
 
 object ScalarOperators {
 
@@ -47,16 +49,38 @@ object ScalarOperators {
       nullCheck: Boolean,
       resultType: TypeInformation[_],
       left: GeneratedExpression,
-      right: GeneratedExpression)
-    : GeneratedExpression = {
-    val leftCasting = numericCasting(left.resultType, resultType)
+      right: GeneratedExpression,
+      config: TableConfig): GeneratedExpression = {
+
+    val leftCasting = operator match {
+      case "%" =>
+        if (left.resultType == right.resultType) {
+          numericCasting(left.resultType, resultType)
+        } else {
+          val castedType = if (isDecimal(left.resultType)) {
+            Types.LONG
+          } else {
+            left.resultType
+          }
+          numericCasting(left.resultType, castedType)
+        }
+      case _ => numericCasting(left.resultType, resultType)
+    }
     val rightCasting = numericCasting(right.resultType, resultType)
     val resultTypeTerm = primitiveTypeTermForTypeInfo(resultType)
 
     generateOperatorIfNotNull(nullCheck, resultType, left, right) {
       (leftTerm, rightTerm) =>
         if (isDecimal(resultType)) {
-          s"${leftCasting(leftTerm)}.${arithOpToDecMethod(operator)}(${rightCasting(rightTerm)})"
+          val decMethod = arithOpToDecMethod(operator)
+          operator match {
+            // include math context for decimal division
+            case "/" =>
+              val mathContext = mathContextToString(config.getDecimalContext)
+              s"${leftCasting(leftTerm)}.$decMethod(${rightCasting(rightTerm)}, $mathContext)"
+            case _ =>
+              s"${leftCasting(leftTerm)}.$decMethod(${rightCasting(rightTerm)})"
+          }
         } else {
           s"($resultTypeTerm) (${leftCasting(leftTerm)} $operator ${rightCasting(rightTerm)})"
         }
@@ -801,19 +825,29 @@ object ScalarOperators {
   def generateTemporalPlusMinus(
       plus: Boolean,
       nullCheck: Boolean,
+      resultType: TypeInformation[_],
       left: GeneratedExpression,
-      right: GeneratedExpression)
+      right: GeneratedExpression,
+      config: TableConfig)
     : GeneratedExpression = {
 
     val op = if (plus) "+" else "-"
 
     (left.resultType, right.resultType) match {
+      // arithmetic of time point and time interval
       case (l: TimeIntervalTypeInfo[_], r: TimeIntervalTypeInfo[_]) if l == r =>
-        generateArithmeticOperator(op, nullCheck, l, left, right)
+        generateArithmeticOperator(op, nullCheck, l, left, right, config)
 
       case (SqlTimeTypeInfo.DATE, TimeIntervalTypeInfo.INTERVAL_MILLIS) =>
-        generateOperatorIfNotNull(nullCheck, SqlTimeTypeInfo.DATE, left, right) {
-            (l, r) => s"$l $op ((int) ($r / ${MILLIS_PER_DAY}L))"
+        resultType match {
+          case SqlTimeTypeInfo.DATE =>
+            generateOperatorIfNotNull(nullCheck, SqlTimeTypeInfo.DATE, left, right) {
+              (l, r) => s"$l $op ((int) ($r / ${MILLIS_PER_DAY}L))"
+            }
+          case SqlTimeTypeInfo.TIMESTAMP =>
+            generateOperatorIfNotNull(nullCheck, SqlTimeTypeInfo.TIMESTAMP, left, right) {
+              (l, r) => s"$l * ${MILLIS_PER_DAY}L $op $r"
+            }
         }
 
       case (SqlTimeTypeInfo.DATE, TimeIntervalTypeInfo.INTERVAL_MONTHS) =>
@@ -834,6 +868,38 @@ object ScalarOperators {
       case (SqlTimeTypeInfo.TIMESTAMP, TimeIntervalTypeInfo.INTERVAL_MONTHS) =>
         generateOperatorIfNotNull(nullCheck, SqlTimeTypeInfo.TIMESTAMP, left, right) {
           (l, r) => s"${qualifyMethod(BuiltInMethod.ADD_MONTHS.method)}($l, $op($r))"
+        }
+
+      // minus arithmetic of time points (i.e. for TIMESTAMPDIFF)
+      case (l: SqlTimeTypeInfo[_], r: SqlTimeTypeInfo[_]) if !plus =>
+        resultType match {
+          case TimeIntervalTypeInfo.INTERVAL_MONTHS =>
+            generateOperatorIfNotNull(nullCheck, resultType, left, right) {
+              (ll, rr) => (l, r) match {
+                case (SqlTimeTypeInfo.TIMESTAMP, SqlTimeTypeInfo.DATE) =>
+                  s"${qualifyMethod(BuiltInMethod.SUBTRACT_MONTHS.method)}" +
+                    s"($ll, $rr * ${MILLIS_PER_DAY}L)"
+                case (SqlTimeTypeInfo.DATE, SqlTimeTypeInfo.TIMESTAMP) =>
+                  s"${qualifyMethod(BuiltInMethod.SUBTRACT_MONTHS.method)}" +
+                    s"($ll * ${MILLIS_PER_DAY}L, $rr)"
+                case _ =>
+                  s"${qualifyMethod(BuiltInMethod.SUBTRACT_MONTHS.method)}($ll, $rr)"
+               }
+            }
+
+          case TimeIntervalTypeInfo.INTERVAL_MILLIS =>
+            generateOperatorIfNotNull(nullCheck, resultType, left, right) {
+              (ll, rr) => (l, r) match {
+                case (SqlTimeTypeInfo.TIMESTAMP, SqlTimeTypeInfo.TIMESTAMP) =>
+                  s"$ll $op $rr"
+                case (SqlTimeTypeInfo.DATE, SqlTimeTypeInfo.DATE) =>
+                  s"($ll * ${MILLIS_PER_DAY}L) $op ($rr * ${MILLIS_PER_DAY}L)"
+                case (SqlTimeTypeInfo.TIMESTAMP, SqlTimeTypeInfo.DATE) =>
+                  s"$ll $op ($rr * ${MILLIS_PER_DAY}L)"
+                case (SqlTimeTypeInfo.DATE, SqlTimeTypeInfo.TIMESTAMP) =>
+                  s"($ll * ${MILLIS_PER_DAY}L) $op $rr"
+              }
+            }
         }
 
       case _ =>
@@ -1156,9 +1222,9 @@ object ScalarOperators {
       s"""
          |${map.code}
          |${key.code}
-         |boolean $nullTerm = (${map.nullTerm} || ${key.nullTerm});
-         |$resultTypeTerm $resultTerm = $nullTerm ?
+         |$resultTypeTerm $resultTerm = (${map.nullTerm} || ${key.nullTerm}) ?
          |  null : ($resultTypeTerm) ${map.resultTerm}.get(${key.resultTerm});
+         |boolean $nullTerm = $resultTerm == null;
          |""".stripMargin
     } else {
       s"""
@@ -1168,7 +1234,14 @@ object ScalarOperators {
          | ${map.resultTerm}.get(${key.resultTerm});
          |""".stripMargin
     }
-    GeneratedExpression(resultTerm, nullTerm, accessCode, resultType)
+    val unboxing = codeGenerator.generateInputFieldUnboxing(resultType, resultTerm)
+
+    unboxing.copy(code =
+      s"""
+         |$accessCode
+         |${unboxing.code}
+         |""".stripMargin
+    )
   }
 
   def generateMapCardinality(
@@ -1269,6 +1342,14 @@ object ScalarOperators {
     case "/" => "divide"
     case "%" => "remainder"
     case _ => throw new CodeGenException(s"Unsupported decimal arithmetic operator: '$operator'")
+  }
+
+  private def mathContextToString(mathContext: MathContext): String = mathContext match {
+    case MathContext.DECIMAL32 => "java.math.MathContext.DECIMAL32"
+    case MathContext.DECIMAL64 => "java.math.MathContext.DECIMAL64"
+    case MathContext.DECIMAL128 => "java.math.MathContext.DECIMAL128"
+    case MathContext.UNLIMITED => "java.math.MathContext.UNLIMITED"
+    case _ => s"""new java.math.MathContext("$mathContext")"""
   }
 
   private def numericCasting(

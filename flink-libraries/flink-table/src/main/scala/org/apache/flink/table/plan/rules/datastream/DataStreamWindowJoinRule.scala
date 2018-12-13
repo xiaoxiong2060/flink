@@ -36,7 +36,7 @@ class DataStreamWindowJoinRule
     classOf[FlinkLogicalJoin],
     FlinkConventions.LOGICAL,
     FlinkConventions.DATASTREAM,
-    "DataStreamJoinRule") {
+    "DataStreamWindowJoinRule") {
 
   override def matches(call: RelOptRuleCall): Boolean = {
     val join: FlinkLogicalJoin = call.rel(0).asInstanceOf[FlinkLogicalJoin]
@@ -52,7 +52,7 @@ class DataStreamWindowJoinRule
       if (windowBounds.get.isEventTime) {
         true
       } else {
-        // Check that no event-time attributes are in the input because the processing time window
+        // Check that no event-time attributes are in the output because the processing time window
         // join does not correctly hold back watermarks.
         // We rely on projection pushdown to remove unused attributes before the join.
         !join.getRowType.getFieldList.asScala

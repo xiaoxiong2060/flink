@@ -18,6 +18,7 @@
 
 package org.apache.flink.table.runtime.batch.table
 
+import java.math.MathContext
 import java.sql.{Date, Time, Timestamp}
 import java.util
 
@@ -29,13 +30,13 @@ import org.apache.flink.table.api.scala._
 import org.apache.flink.table.expressions.Literal
 import org.apache.flink.table.expressions.utils._
 import org.apache.flink.table.functions.ScalarFunction
-import org.apache.flink.table.runtime.utils.{TableProgramsCollectionTestBase, TableProgramsTestBase, UserDefinedFunctionTestUtils}
 import org.apache.flink.table.runtime.utils.TableProgramsTestBase.TableConfigMode
+import org.apache.flink.table.runtime.utils.{TableProgramsCollectionTestBase, TableProgramsTestBase, UserDefinedFunctionTestUtils}
 import org.apache.flink.test.util.TestBaseUtils
 import org.apache.flink.test.util.TestBaseUtils.compareResultAsText
 import org.apache.flink.types.Row
-import org.junit._
 import org.junit.Assert.assertEquals
+import org.junit._
 import org.junit.runner.RunWith
 import org.junit.runners.Parameterized
 
@@ -330,6 +331,7 @@ class CalcITCase(
   def testAdvancedDataTypes(): Unit = {
     val env = ExecutionEnvironment.getExecutionEnvironment
     val tEnv = TableEnvironment.getTableEnvironment(env, config)
+    tEnv.getConfig.setDecimalContext(new MathContext(30))
 
     val t = env
       .fromElements((
@@ -341,10 +343,11 @@ class CalcITCase(
       .toTable(tEnv, 'a, 'b, 'c, 'd, 'e)
       .select('a, 'b, 'c, 'd, 'e, BigDecimal("11.2"), BigDecimal("11.2").bigDecimal,
         Date.valueOf("1984-07-12"), Time.valueOf("14:34:24"),
-        Timestamp.valueOf("1984-07-12 14:34:24"))
+        Timestamp.valueOf("1984-07-12 14:34:24"),
+        BigDecimal("1").toExpr / BigDecimal("3"))
 
     val expected = "78.454654654654654,4E+9999,1984-07-12,14:34:24,1984-07-12 14:34:24.0," +
-      "11.2,11.2,1984-07-12,14:34:24,1984-07-12 14:34:24.0"
+      "11.2,11.2,1984-07-12,14:34:24,1984-07-12 14:34:24.0,0.333333333333333333333333333333"
     val results = t.toDataSet[Row].collect()
     TestBaseUtils.compareResultAsText(results.asJava, expected)
   }
@@ -479,9 +482,14 @@ class CalcITCase(
 
     val table = env.fromElements(rowValue).toTable(tEnv, 'a, 'b, 'c)
 
-    val result = table.select(row('a, 'b, 'c), array(12, 'b), map('a, 'c))
+    val result = table.select(
+      row('a, 'b, 'c),
+      array(12, 'b),
+      map('a, 'c),
+      map('a, 'c).at('a) === 'c
+    )
 
-    val expected = "foo,12,1984-07-12 14:34:24.0,[12, 12],{foo=1984-07-12 14:34:24.0}"
+    val expected = "foo,12,1984-07-12 14:34:24.0,[12, 12],{foo=1984-07-12 14:34:24.0},true"
     val results = result.toDataSet[Row].collect()
     TestBaseUtils.compareResultAsText(results.asJava, expected)
 
@@ -542,30 +550,50 @@ class CalcITCase(
   }
 
   @Test
-  def testUDFWithUnicodeParameter(): Unit = {
+  def testFunctionWithUnicodeParameters(): Unit = {
     val data = List(
-      ("a\u0001b", "c\"d", "e\\\"\u0004f"),
+      ("a\u0001b", "c\"d", "e\\\"\u0004f"), // uses Java/Scala escaping
       ("x\u0001y", "y\"z", "z\\\"\u0004z")
     )
+
     val env = ExecutionEnvironment.getExecutionEnvironment
+
     val tEnv = TableEnvironment.getTableEnvironment(env)
+
     val splitUDF0 = new SplitUDF(deterministic = true)
     val splitUDF1 = new SplitUDF(deterministic = false)
+
+     // uses Java/Scala escaping
     val ds = env.fromCollection(data).toTable(tEnv, 'a, 'b, 'c)
-             .select(splitUDF0('a, "\u0001", 0) as 'a0,
-                     splitUDF1('a, "\u0001", 0) as 'a1,
-                     splitUDF0('b, "\"", 1) as 'b0,
-                     splitUDF1('b, "\"", 1) as 'b1,
-                     splitUDF0('c, "\\\"\u0004", 0) as 'c0,
-                     splitUDF1('c, "\\\"\u0004", 0) as 'c1
-             )
+      .select(
+        splitUDF0('a, "\u0001", 0) as 'a0,
+        splitUDF1('a, "\u0001", 0) as 'a1,
+        splitUDF0('b, "\"", 1) as 'b0,
+        splitUDF1('b, "\"", 1) as 'b1,
+        splitUDF0('c, "\\\"\u0004", 0) as 'c0,
+        splitUDF1('c, "\\\"\u0004", 0) as 'c1)
+
     val results = ds.collect()
-    val expected = List(
-      "a,a,d,d,e,e", "x,x,z,z,z,z"
-    ).mkString("\n")
+
+    val expected = List("a,a,d,d,e,e", "x,x,z,z,z,z").mkString("\n")
     TestBaseUtils.compareResultAsText(results.asJava, expected)
   }
 
+  @Test
+  def testSplitFieldsOnCustomType(): Unit = {
+    val env = ExecutionEnvironment.getExecutionEnvironment
+    val tEnv = TableEnvironment.getTableEnvironment(env, config)
+    tEnv.getConfig.setMaxGeneratedCodeLength(1)  // splits fields
+
+    val ds = CollectionDataSets.getCustomTypeDataSet(env)
+    val filterDs = ds.toTable(tEnv, 'myInt as 'i, 'myLong as 'l, 'myString as 's)
+      .filter('s.like("%a%") && 's.charLength() > 12)
+      .select('i, 'l, 's.charLength())
+
+    val expected = "3,3,25\n" + "3,5,14\n"
+    val results = filterDs.toDataSet[Row].collect()
+    TestBaseUtils.compareResultAsText(results.asJava, expected)
+  }
 }
 
 object CalcITCase {

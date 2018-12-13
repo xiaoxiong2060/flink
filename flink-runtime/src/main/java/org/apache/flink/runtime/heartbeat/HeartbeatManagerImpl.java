@@ -106,7 +106,7 @@ public class HeartbeatManagerImpl<I, O> implements HeartbeatManager<I, O> {
 		return heartbeatListener;
 	}
 
-	Collection<HeartbeatManagerImpl.HeartbeatMonitor<O>> getHeartbeatTargets() {
+	Collection<HeartbeatMonitor<O>> getHeartbeatTargets() {
 		return heartbeatTargets.values();
 	}
 
@@ -118,7 +118,7 @@ public class HeartbeatManagerImpl<I, O> implements HeartbeatManager<I, O> {
 	public void monitorTarget(ResourceID resourceID, HeartbeatTarget<O> heartbeatTarget) {
 		if (!stopped) {
 			if (heartbeatTargets.containsKey(resourceID)) {
-				log.info("The target with resource ID {} is already been monitored.", resourceID);
+				log.debug("The target with resource ID {} is already been monitored.", resourceID);
 			} else {
 				HeartbeatManagerImpl.HeartbeatMonitor<O> heartbeatMonitor = new HeartbeatManagerImpl.HeartbeatMonitor<>(
 					resourceID,
@@ -202,7 +202,7 @@ public class HeartbeatManagerImpl<I, O> implements HeartbeatManager<I, O> {
 					heartbeatListener.reportPayload(requestOrigin, heartbeatPayload);
 				}
 
-				CompletableFuture<O> futurePayload = heartbeatListener.retrievePayload();
+				CompletableFuture<O> futurePayload = heartbeatListener.retrievePayload(requestOrigin);
 
 				if (futurePayload != null) {
 					CompletableFuture<Void> sendHeartbeatFuture = futurePayload.thenAcceptAsync(
@@ -277,7 +277,7 @@ public class HeartbeatManagerImpl<I, O> implements HeartbeatManager<I, O> {
 			this.scheduledExecutor = Preconditions.checkNotNull(scheduledExecutor);
 			this.heartbeatListener = Preconditions.checkNotNull(heartbeatListener);
 
-			Preconditions.checkArgument(heartbeatTimeoutIntervalMs >= 0L, "The heartbeat timeout interval has to be larger than 0.");
+			Preconditions.checkArgument(heartbeatTimeoutIntervalMs > 0L, "The heartbeat timeout interval has to be larger than 0.");
 			this.heartbeatTimeoutIntervalMs = heartbeatTimeoutIntervalMs;
 
 			lastHeartbeat = 0L;
@@ -287,6 +287,10 @@ public class HeartbeatManagerImpl<I, O> implements HeartbeatManager<I, O> {
 
 		HeartbeatTarget<O> getHeartbeatTarget() {
 			return heartbeatTarget;
+		}
+
+		ResourceID getHeartbeatTargetId() {
+			return resourceID;
 		}
 
 		public long getLastHeartbeat() {

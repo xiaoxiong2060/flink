@@ -25,10 +25,10 @@ import org.apache.flink.core.fs.FileStatus;
 import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.core.fs.FileSystem.WriteMode;
 import org.apache.flink.core.fs.Path;
+import org.apache.flink.testutils.s3.S3TestCredentials;
 import org.apache.flink.util.TestLogger;
 
 import org.junit.AfterClass;
-import org.junit.Assume;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
@@ -39,143 +39,71 @@ import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
+import static org.apache.flink.core.fs.FileSystemTestUtils.checkPathEventualExistence;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
 
 /**
- * Unit tests for the S3 file system support via Presto's PrestoS3FileSystem.
- * These tests do not actually read from or write to S3.
+ * Unit tests for the S3 file system support via Hadoop's {@link org.apache.hadoop.fs.s3a.S3AFileSystem}.
+ *
+ * <p><strong>BEWARE</strong>: tests must take special care of S3's
+ * <a href="https://docs.aws.amazon.com/AmazonS3/latest/dev/Introduction.html#ConsistencyModel">consistency guarantees</a>
+ * and what the {@link org.apache.hadoop.fs.s3a.S3AFileSystem} offers.
  */
 public class HadoopS3FileSystemITCase extends TestLogger {
-
-	private static final String BUCKET = System.getenv("ARTIFACTS_AWS_BUCKET");
-
-	private static final String TEST_DATA_DIR = "tests-" + UUID.randomUUID();
-
-	private static final String ACCESS_KEY = System.getenv("ARTIFACTS_AWS_ACCESS_KEY");
-	private static final String SECRET_KEY = System.getenv("ARTIFACTS_AWS_SECRET_KEY");
 
 	/**
 	 * Will be updated by {@link #checkCredentialsAndSetup()} if the test is not skipped.
 	 */
-	private static boolean skipTest = true;
+	private static FileSystem fileSystem;
+
+	private static Path basePath;
 
 	@BeforeClass
 	public static void checkCredentialsAndSetup() throws IOException {
 		// check whether credentials exist
-		Assume.assumeTrue("AWS S3 bucket not configured, skipping test...", BUCKET != null);
-		Assume.assumeTrue("AWS S3 access key not configured, skipping test...", ACCESS_KEY != null);
-		Assume.assumeTrue("AWS S3 secret key not configured, skipping test...", SECRET_KEY != null);
+		S3TestCredentials.assumeCredentialsAvailable();
 
 		// initialize configuration with valid credentials
 		final Configuration conf = new Configuration();
-		conf.setString("s3.access.key", ACCESS_KEY);
-		conf.setString("s3.secret.key", SECRET_KEY);
+		conf.setString("s3.access.key", S3TestCredentials.getS3AccessKey());
+		conf.setString("s3.secret.key", S3TestCredentials.getS3SecretKey());
 		FileSystem.initialize(conf);
 
+		basePath = new Path(S3TestCredentials.getTestBucketUri() + "tests-" + UUID.randomUUID());
+		fileSystem = basePath.getFileSystem();
+
 		// check for uniqueness of the test directory
-		final Path directory = new Path("s3://" + BUCKET + '/' + TEST_DATA_DIR);
-		final FileSystem fs = directory.getFileSystem();
-
 		// directory must not yet exist
-		assertFalse(fs.exists(directory));
-
-		// reset configuration
-		FileSystem.initialize(new Configuration());
-
-		skipTest = false;
+		assertFalse(fileSystem.exists(basePath));
 	}
 
 	@AfterClass
-	public static void cleanUp() throws IOException {
-		if (!skipTest) {
-			// initialize configuration with valid credentials
-			final Configuration conf = new Configuration();
-			conf.setString("s3.access.key", ACCESS_KEY);
-			conf.setString("s3.secret.key", SECRET_KEY);
-			FileSystem.initialize(conf);
-
-			final Path directory = new Path("s3://" + BUCKET + '/' + TEST_DATA_DIR);
-			final FileSystem fs = directory.getFileSystem();
-
-			// clean up
-			fs.delete(directory, true);
-
-			// now directory must be gone
-			assertFalse(fs.exists(directory));
-
-			// reset configuration
-			FileSystem.initialize(new Configuration());
-		}
-	}
-
-	@Test
-	public void testConfigKeysForwarding() throws Exception {
-		final Path path = new Path("s3://" + BUCKET + '/');
-
-		// access without credentials should fail
-		{
-			FileSystem.initialize(new Configuration());
-
-			try {
-				path.getFileSystem();
-				fail("should fail with an exception");
-			} catch (IOException ignored) {}
-		}
-
-		// standard Hadoop-style credential keys
-		{
-			Configuration conf = new Configuration();
-			conf.setString("fs.s3a.access.key", ACCESS_KEY);
-			conf.setString("fs.s3a.secret.key", SECRET_KEY);
-
-			FileSystem.initialize(conf);
-			path.getFileSystem();
-		}
-
-		// shortened Hadoop-style credential keys
-		{
-			Configuration conf = new Configuration();
-			conf.setString("s3.access.key", ACCESS_KEY);
-			conf.setString("s3.secret.key", SECRET_KEY);
-
-			FileSystem.initialize(conf);
-			path.getFileSystem();
-		}
-
-		// shortened Presto-style credential keys
-		{
-			Configuration conf = new Configuration();
-			conf.setString("s3.access-key", ACCESS_KEY);
-			conf.setString("s3.secret-key", SECRET_KEY);
-
-			FileSystem.initialize(conf);
-			path.getFileSystem();
-		}
-
-		// see that setting a blank config again clears everything
-		// and access without credentials should fail
-		FileSystem.initialize(new Configuration());
+	public static void cleanUp() throws IOException, InterruptedException {
 		try {
-			path.getFileSystem();
-			fail("should fail with an exception");
-		} catch (IOException ignored) {}
+			if (fileSystem != null) {
+				final long deadline = System.nanoTime() + 30_000_000_000L; // 30 secs
+
+				// clean up
+				fileSystem.delete(basePath, true);
+
+				// now directory must be gone
+				checkPathEventualExistence(fileSystem, basePath, false, deadline);
+			}
+		}
+		finally {
+			FileSystem.initialize(new Configuration());
+		}
 	}
 
 	@Test
 	public void testSimpleFileWriteAndRead() throws Exception {
-		final Configuration conf = new Configuration();
-		conf.setString("s3.access.key", ACCESS_KEY);
-		conf.setString("s3.secret.key", SECRET_KEY);
-
+		final long deadline = System.nanoTime() + 30_000_000_000L; // 30 secs
 		final String testLine = "Hello Upload!";
 
-		FileSystem.initialize(conf);
-
-		final Path path = new Path("s3://" + BUCKET + '/' + TEST_DATA_DIR + "/test.txt");
+		final Path path = new Path(basePath, "test.txt");
 		final FileSystem fs = path.getFileSystem();
 
 		try {
@@ -183,6 +111,9 @@ public class HadoopS3FileSystemITCase extends TestLogger {
 					OutputStreamWriter writer = new OutputStreamWriter(out, StandardCharsets.UTF_8)) {
 				writer.write(testLine);
 			}
+
+			// just in case, wait for the path to exist
+			checkPathEventualExistence(fs, path, true, deadline);
 
 			try (FSDataInputStream in = fs.open(path);
 					InputStreamReader ir = new InputStreamReader(in, StandardCharsets.UTF_8);
@@ -194,17 +125,16 @@ public class HadoopS3FileSystemITCase extends TestLogger {
 		finally {
 			fs.delete(path, false);
 		}
+
+		// now file must be gone (this is eventually-consistent!)
+		checkPathEventualExistence(fs, path, false, deadline);
 	}
 
 	@Test
 	public void testDirectoryListing() throws Exception {
-		final Configuration conf = new Configuration();
-		conf.setString("s3.access.key", ACCESS_KEY);
-		conf.setString("s3.secret.key", SECRET_KEY);
+		final long deadline = System.nanoTime() + 30_000_000_000L; // 30 secs
 
-		FileSystem.initialize(conf);
-
-		final Path directory = new Path("s3://" + BUCKET + '/' + TEST_DATA_DIR + "/testdir/");
+		final Path directory = new Path(basePath, "testdir/");
 		final FileSystem fs = directory.getFileSystem();
 
 		// directory must not yet exist
@@ -214,8 +144,7 @@ public class HadoopS3FileSystemITCase extends TestLogger {
 			// create directory
 			assertTrue(fs.mkdirs(directory));
 
-			// seems the presto file system does not assume existence of empty directories in S3
-			assertTrue(fs.exists(directory));
+			checkPathEventualExistence(fs, directory, true, deadline);
 
 			// directory empty
 			assertEquals(0, fs.listStatus(directory).length);
@@ -224,10 +153,13 @@ public class HadoopS3FileSystemITCase extends TestLogger {
 			final int numFiles = 3;
 			for (int i = 0; i < numFiles; i++) {
 				Path file = new Path(directory, "/file-" + i);
-				try (FSDataOutputStream out = fs.create(file, WriteMode.NO_OVERWRITE);
+				try (FSDataOutputStream out = fs.create(file, WriteMode.OVERWRITE);
 						OutputStreamWriter writer = new OutputStreamWriter(out, StandardCharsets.UTF_8)) {
 					writer.write("hello-" + i + "\n");
 				}
+				// just in case, wait for the file to exist (should then also be reflected in the
+				// directory's file list below)
+				checkPathEventualExistence(fs, file, true, deadline);
 			}
 
 			FileStatus[] files = fs.listStatus(directory);
@@ -246,7 +178,7 @@ public class HadoopS3FileSystemITCase extends TestLogger {
 			fs.delete(directory, true);
 		}
 
-		// now directory must be gone
-		assertFalse(fs.exists(directory));
+		// now directory must be gone (this is eventually-consistent, though!)
+		checkPathEventualExistence(fs, directory, false, deadline);
 	}
 }

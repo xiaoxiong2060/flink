@@ -19,6 +19,7 @@
 package org.apache.flink.runtime.rest.messages.taskmanager;
 
 import org.apache.flink.runtime.clusterframework.types.ResourceID;
+import org.apache.flink.util.TestLogger;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -30,7 +31,7 @@ import static org.junit.Assert.assertTrue;
 /**
  * Tests for {@link TaskManagerIdPathParameter}.
  */
-public class TaskManagerIdPathParameterTest {
+public class TaskManagerIdPathParameterTest extends TestLogger {
 
 	private TaskManagerIdPathParameter taskManagerIdPathParameter;
 

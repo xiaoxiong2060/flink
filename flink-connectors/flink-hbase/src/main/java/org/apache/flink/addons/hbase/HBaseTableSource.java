@@ -25,6 +25,7 @@ import org.apache.flink.api.java.typeutils.RowTypeInfo;
 import org.apache.flink.table.api.TableSchema;
 import org.apache.flink.table.sources.BatchTableSource;
 import org.apache.flink.table.sources.ProjectableTableSource;
+import org.apache.flink.table.util.TableConnectorUtil;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.Preconditions;
 
@@ -50,7 +51,7 @@ import java.util.Map;
  * hSrc.addColumn("fam2", "col1", String.class);
  *
  * tableEnv.registerTableSource("hTable", hSrc);
- * Table res = tableEnv.sql("SELECT t.fam2.col1, SUM(t.fam1.col2) FROM hTable AS t GROUP BY t.fam2.col1");
+ * Table res = tableEnv.sqlQuery("SELECT t.fam2.col1, SUM(t.fam1.col2) FROM hTable AS t GROUP BY t.fam2.col1");
  * }
  * </pre>
  *
@@ -132,7 +133,7 @@ public class HBaseTableSource implements BatchTableSource<Row>, ProjectableTable
 
 	@Override
 	public DataSet<Row> getDataSet(ExecutionEnvironment execEnv) {
-		return execEnv.createInput(new HBaseRowInputFormat(conf, tableName, hBaseSchema), getReturnType());
+		return execEnv.createInput(new HBaseRowInputFormat(conf, tableName, hBaseSchema), getReturnType()).name(explainSource());
 	}
 
 	@Override
@@ -143,9 +144,10 @@ public class HBaseTableSource implements BatchTableSource<Row>, ProjectableTable
 		for (int field : fields) {
 			String family = famNames[field];
 			Map<String, TypeInformation<?>> familyInfo = hBaseSchema.getFamilyInfo(family);
-			for (String qualifier : familyInfo.keySet()) {
+			for (Map.Entry<String, TypeInformation<?>> entry : familyInfo.entrySet()) {
 				// create the newSchema
-				newTableSource.addColumn(family, qualifier, familyInfo.get(qualifier).getTypeClass());
+				String qualifier = entry.getKey();
+				newTableSource.addColumn(family, qualifier, entry.getValue().getTypeClass());
 			}
 		}
 		return newTableSource;
@@ -153,6 +155,6 @@ public class HBaseTableSource implements BatchTableSource<Row>, ProjectableTable
 
 	@Override
 	public String explainSource() {
-		return "";
+		return TableConnectorUtil.generateRuntimeName(this.getClass(), getFieldNames());
 	}
 }

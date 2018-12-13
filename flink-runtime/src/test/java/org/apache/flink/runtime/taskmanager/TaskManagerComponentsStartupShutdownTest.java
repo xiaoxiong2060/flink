@@ -20,23 +20,20 @@ package org.apache.flink.runtime.taskmanager;
 
 import org.apache.flink.api.common.time.Time;
 import org.apache.flink.configuration.AkkaOptions;
-import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.ConfigurationUtils;
 import org.apache.flink.core.memory.MemoryType;
 import org.apache.flink.runtime.akka.AkkaUtils;
 import org.apache.flink.runtime.clusterframework.FlinkResourceManager;
 import org.apache.flink.runtime.clusterframework.standalone.StandaloneResourceManager;
 import org.apache.flink.runtime.clusterframework.types.ResourceID;
+import org.apache.flink.runtime.concurrent.Executors;
 import org.apache.flink.runtime.execution.librarycache.FlinkUserCodeClassLoaders;
 import org.apache.flink.runtime.highavailability.HighAvailabilityServices;
 import org.apache.flink.runtime.highavailability.nonha.embedded.EmbeddedHaServices;
 import org.apache.flink.runtime.io.disk.iomanager.IOManager;
 import org.apache.flink.runtime.io.disk.iomanager.IOManagerAsync;
-import org.apache.flink.runtime.io.network.LocalConnectionManager;
 import org.apache.flink.runtime.io.network.NetworkEnvironment;
-import org.apache.flink.runtime.io.network.TaskEventDispatcher;
-import org.apache.flink.runtime.io.network.buffer.NetworkBufferPool;
-import org.apache.flink.runtime.io.network.partition.ResultPartitionManager;
 import org.apache.flink.runtime.jobmanager.JobManager;
 import org.apache.flink.runtime.jobmanager.MemoryArchivist;
 import org.apache.flink.runtime.memory.MemoryManager;
@@ -44,7 +41,7 @@ import org.apache.flink.runtime.messages.TaskManagerMessages;
 import org.apache.flink.runtime.metrics.MetricRegistryConfiguration;
 import org.apache.flink.runtime.metrics.NoOpMetricRegistry;
 import org.apache.flink.runtime.metrics.groups.TaskManagerMetricGroup;
-import org.apache.flink.runtime.query.KvStateRegistry;
+import org.apache.flink.runtime.state.TaskExecutorLocalStateStoresManager;
 import org.apache.flink.runtime.taskexecutor.TaskManagerConfiguration;
 import org.apache.flink.runtime.testingUtils.TestingUtils;
 import org.apache.flink.util.TestLogger;
@@ -60,6 +57,8 @@ import java.net.InetAddress;
 import java.util.concurrent.TimeUnit;
 
 import scala.Option;
+import scala.concurrent.Await;
+import scala.concurrent.duration.Duration;
 import scala.concurrent.duration.FiniteDuration;
 
 import static org.junit.Assert.assertTrue;
@@ -73,7 +72,6 @@ public class TaskManagerComponentsStartupShutdownTest extends TestLogger {
 	@Test
 	public void testComponentsStartupShutdown() throws Exception {
 
-		final String[] TMP_DIR = new String[] { ConfigConstants.DEFAULT_TASK_MANAGER_TMP_PATH };
 		final Time timeout = Time.seconds(100);
 		final int BUFFER_SIZE = 32 * 1024;
 
@@ -81,6 +79,8 @@ public class TaskManagerComponentsStartupShutdownTest extends TestLogger {
 		config.setString(AkkaOptions.WATCH_HEARTBEAT_INTERVAL, "200 ms");
 		config.setString(AkkaOptions.WATCH_HEARTBEAT_PAUSE, "1 s");
 		config.setInteger(AkkaOptions.WATCH_THRESHOLD, 1);
+
+		final String[] TMP_DIR = ConfigurationUtils.parseTempDirectories(config);
 
 		ActorSystem actorSystem = null;
 
@@ -120,11 +120,12 @@ public class TaskManagerComponentsStartupShutdownTest extends TestLogger {
 				Time.milliseconds(500),
 				Time.seconds(30),
 				Time.seconds(10),
-				1000000, // cleanup interval
 				config,
 				false, // exit-jvm-on-fatal-error
 				FlinkUserCodeClassLoaders.ResolveOrder.CHILD_FIRST,
-				new String[0]);
+				new String[0],
+				null,
+				null);
 
 			final int networkBufNum = 32;
 			// note: the network buffer memory configured here is not actually used below but set
@@ -140,20 +141,20 @@ public class TaskManagerComponentsStartupShutdownTest extends TestLogger {
 			final MemoryManager memManager = new MemoryManager(networkBufNum * BUFFER_SIZE, 1, BUFFER_SIZE, MemoryType.HEAP, false);
 			final IOManager ioManager = new IOManagerAsync(TMP_DIR);
 			final NetworkEnvironment network = new NetworkEnvironment(
-				new NetworkBufferPool(32, netConf.networkBufferSize()),
-				new LocalConnectionManager(),
-				new ResultPartitionManager(),
-				new TaskEventDispatcher(),
-				new KvStateRegistry(),
-				null,
-				null,
-				netConf.ioMode(),
+				32,
+				netConf.networkBufferSize(),
 				netConf.partitionRequestInitialBackoff(),
 				netConf.partitionRequestMaxBackoff(),
 				netConf.networkBuffersPerChannel(),
-				netConf.floatingNetworkBuffersPerGate());
+				netConf.floatingNetworkBuffersPerGate(),
+				true);
 
 			network.start();
+
+			TaskExecutorLocalStateStoresManager storesManager = new TaskExecutorLocalStateStoresManager(
+				false,
+				ioManager.getSpillingDirectories(),
+				Executors.directExecutor());
 
 			MetricRegistryConfiguration metricRegistryConfiguration = MetricRegistryConfiguration.fromConfiguration(config);
 
@@ -166,6 +167,7 @@ public class TaskManagerComponentsStartupShutdownTest extends TestLogger {
 				memManager,
 				ioManager,
 				network,
+				storesManager,
 				numberOfSlots,
 				highAvailabilityServices,
 				new TaskManagerMetricGroup(NoOpMetricRegistry.INSTANCE, connectionInfo.getHostname(), connectionInfo.getResourceID().getResourceIdString()));
@@ -194,8 +196,8 @@ public class TaskManagerComponentsStartupShutdownTest extends TestLogger {
 			jobManager.tell(Kill.getInstance(), ActorRef.noSender());
 
 			// shut down the actors and the actor system
-			actorSystem.shutdown();
-			actorSystem.awaitTermination();
+			actorSystem.terminate();
+			Await.ready(actorSystem.whenTerminated(), Duration.Inf());
 			actorSystem = null;
 
 			// now that the TaskManager is shut down, the components should be shut down as well
@@ -204,9 +206,9 @@ public class TaskManagerComponentsStartupShutdownTest extends TestLogger {
 			assertTrue(memManager.isShutdown());
 		} finally {
 			if (actorSystem != null) {
-				actorSystem.shutdown();
+				actorSystem.terminate();
 
-				actorSystem.awaitTermination(TestingUtils.TESTING_TIMEOUT());
+				Await.ready(actorSystem.whenTerminated(), TestingUtils.TESTING_TIMEOUT());
 			}
 
 			highAvailabilityServices.closeAndCleanupAllData();

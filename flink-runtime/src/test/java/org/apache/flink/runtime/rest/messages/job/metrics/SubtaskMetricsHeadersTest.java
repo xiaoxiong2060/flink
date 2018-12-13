@@ -21,6 +21,7 @@ package org.apache.flink.runtime.rest.messages.job.metrics;
 import org.apache.flink.runtime.rest.messages.JobIDPathParameter;
 import org.apache.flink.runtime.rest.messages.JobVertexIdPathParameter;
 import org.apache.flink.runtime.rest.messages.SubtaskIndexPathParameter;
+import org.apache.flink.util.TestLogger;
 
 import org.junit.Test;
 
@@ -31,7 +32,7 @@ import static org.junit.Assert.assertThat;
 /**
  * Tests for {@link SubtaskMetricsHeaders}.
  */
-public class SubtaskMetricsHeadersTest {
+public class SubtaskMetricsHeadersTest extends TestLogger {
 
 	private final SubtaskMetricsHeaders subtaskMetricsHeaders = SubtaskMetricsHeaders.getInstance();
 

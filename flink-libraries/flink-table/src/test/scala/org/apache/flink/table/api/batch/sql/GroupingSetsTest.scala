@@ -56,6 +56,7 @@ class GroupingSetsTest extends TableTestBase {
         ),
         term("select", "null AS b", "c", "a", "2 AS g")
       ),
+      term("all", "true"),
       term("union", "b", "c", "a", "g")
     )
 
@@ -114,19 +115,11 @@ class GroupingSetsTest extends TableTestBase {
       "DataSetCalc",
       unaryNode(
         "DataSetAggregate",
-        unaryNode(
-          "DataSetUnion",
-          unaryNode(
-            "DataSetValues",
-            batchTableNode(0),
-            tuples(List(null, null, null)),
-            term("values", "a", "b", "c")
-          ),
-          term("union", "a", "b", "c")
-        ),
+        batchTableNode(0),
         term("select", "AVG(a) AS a")
       ),
-      term("select", "null AS b", "null AS c", "a", "0 AS g", "0 AS gb", "0 AS gc",
+      term(
+        "select", "null AS b", "null AS c", "a", "0 AS g", "0 AS gb", "0 AS gc",
         "0 AS gib", "0 AS gic", "0 AS gid")
     )
 
@@ -138,12 +131,15 @@ class GroupingSetsTest extends TableTestBase {
           "DataSetUnion",
           group1,
           group2,
+          term("all", "true"),
           term("union", "b", "c", "a", "g", "gb", "gc", "gib", "gic", "gid")
         ),
         group3,
+        term("all", "true"),
         term("union", "b", "c", "a", "g", "gb", "gc", "gib", "gic", "gid")
       ),
       group4,
+      term("all", "true"),
       term("union", "b", "c", "a", "g", "gb", "gc", "gib", "gic", "gid")
     )
 
@@ -189,19 +185,11 @@ class GroupingSetsTest extends TableTestBase {
       "DataSetCalc",
       unaryNode(
         "DataSetAggregate",
-        unaryNode(
-          "DataSetUnion",
-          unaryNode(
-            "DataSetValues",
-            batchTableNode(0),
-            tuples(List(null, null, null)),
-            term("values", "a", "b", "c")
-          ),
-          term("union", "a", "b", "c")
-        ),
+        batchTableNode(0),
         term("select", "AVG(a) AS a")
       ),
-      term("select", "null AS b", "null AS c", "a", "0 AS g", "0 AS gb", "0 AS gc",
+      term(
+        "select", "null AS b", "null AS c", "a", "0 AS g", "0 AS gb", "0 AS gc",
         "0 AS gib", "0 AS gic", "0 AS gid")
     )
 
@@ -211,9 +199,11 @@ class GroupingSetsTest extends TableTestBase {
         "DataSetUnion",
         group1,
         group2,
+        term("all", "true"),
         term("union", "b", "c", "a", "g", "gb", "gc", "gib", "gic", "gid")
       ),
       group3,
+      term("all", "true"),
       term("union", "b", "c", "a", "g", "gb", "gc", "gib", "gic", "gid")
     )
 

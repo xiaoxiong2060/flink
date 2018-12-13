@@ -26,6 +26,7 @@ import org.apache.flink.api.scala.util.CollectionDataSets
 import org.apache.flink.table.api.TableEnvironment
 import org.apache.flink.table.api.scala._
 import org.apache.flink.table.expressions.Literal
+import org.apache.flink.table.expressions.utils.Func20
 import org.apache.flink.table.runtime.utils.TableProgramsClusterTestBase
 import org.apache.flink.table.runtime.utils.TableProgramsTestBase.TableConfigMode
 import org.apache.flink.table.utils.TableFunc2
@@ -46,14 +47,19 @@ class JoinITCase(
   extends TableProgramsClusterTestBase(execMode, configMode) {
 
   @Test
-  def testJoin(): Unit = {
+  def testInnerJoin(): Unit = {
     val env: ExecutionEnvironment = ExecutionEnvironment.getExecutionEnvironment
     val tEnv = TableEnvironment.getTableEnvironment(env, config)
 
     val ds1 = CollectionDataSets.getSmall3TupleDataSet(env).toTable(tEnv, 'a, 'b, 'c)
     val ds2 = CollectionDataSets.get5TupleDataSet(env).toTable(tEnv, 'd, 'e, 'f, 'g, 'h)
 
-    val joinT = ds1.join(ds2).where('b === 'e).select('c, 'g)
+    val testOpenCall = new Func20
+
+    val joinT = ds1.join(ds2)
+      .where('b === 'e)
+      .where(testOpenCall('a + 'd))
+      .select('c, 'g)
 
     val expected = "Hi,Hallo\n" + "Hello,Hallo Welt\n" + "Hello world,Hallo Welt\n"
     val results = joinT.toDataSet[Row].collect()
@@ -61,7 +67,7 @@ class JoinITCase(
   }
 
   @Test
-  def testJoinWithFilter(): Unit = {
+  def testInnerJoinWithFilter(): Unit = {
 
     val env: ExecutionEnvironment = ExecutionEnvironment.getExecutionEnvironment
     val tEnv = TableEnvironment.getTableEnvironment(env, config)
@@ -77,7 +83,7 @@ class JoinITCase(
   }
 
   @Test
-  def testJoinWithJoinFilter(): Unit = {
+  def testInnerJoinWithJoinFilter(): Unit = {
     val env: ExecutionEnvironment = ExecutionEnvironment.getExecutionEnvironment
     val tEnv = TableEnvironment.getTableEnvironment(env, config)
 
@@ -108,7 +114,7 @@ class JoinITCase(
   }
 
   @Test
-  def testJoinWithMultipleKeys(): Unit = {
+  def testInnerJoinWithMultipleKeys(): Unit = {
     val env: ExecutionEnvironment = ExecutionEnvironment.getExecutionEnvironment
     val tEnv = TableEnvironment.getTableEnvironment(env, config)
 
@@ -126,7 +132,7 @@ class JoinITCase(
   }
 
   @Test
-  def testJoinWithAggregation(): Unit = {
+  def testInnerJoinWithAggregation(): Unit = {
     val env: ExecutionEnvironment = ExecutionEnvironment.getExecutionEnvironment
     val tEnv = TableEnvironment.getTableEnvironment(env, config)
     // use different table env in order to let tmp table ids are the same
@@ -143,7 +149,7 @@ class JoinITCase(
   }
 
   @Test
-  def testJoinWithGroupedAggregation(): Unit = {
+  def testInnerJoinWithGroupedAggregation(): Unit = {
     val env: ExecutionEnvironment = ExecutionEnvironment.getExecutionEnvironment
     val tEnv = TableEnvironment.getTableEnvironment(env, config)
 
@@ -161,7 +167,7 @@ class JoinITCase(
   }
 
   @Test
-  def testJoinPushThroughJoin(): Unit = {
+  def testInnerJoinPushThroughJoin(): Unit = {
     val env: ExecutionEnvironment = ExecutionEnvironment.getExecutionEnvironment
     val tEnv = TableEnvironment.getTableEnvironment(env, config)
 
@@ -181,7 +187,7 @@ class JoinITCase(
   }
 
   @Test
-  def testJoinWithDisjunctivePred(): Unit = {
+  def testInnerJoinWithDisjunctivePred(): Unit = {
     val env: ExecutionEnvironment = ExecutionEnvironment.getExecutionEnvironment
     val tEnv = TableEnvironment.getTableEnvironment(env, config)
 
@@ -198,7 +204,7 @@ class JoinITCase(
   }
 
   @Test
-  def testJoinWithExpressionPreds(): Unit = {
+  def testInnerJoinWithExpressionPreds(): Unit = {
     val env: ExecutionEnvironment = ExecutionEnvironment.getExecutionEnvironment
     val tEnv = TableEnvironment.getTableEnvironment(env, config)
 

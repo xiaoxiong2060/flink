@@ -50,6 +50,11 @@ public class AbstractMetricsHeadersTest extends TestLogger {
 			public String getTargetRestEndpointURL() {
 				return "/";
 			}
+
+			@Override
+			public String getDescription() {
+				return "";
+			}
 		};
 	}
 

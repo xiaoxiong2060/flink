@@ -19,7 +19,6 @@ package org.apache.flink.table.runtime.aggregate
 
 import java.lang.Iterable
 
-import org.apache.flink.api.java.tuple.Tuple
 import org.apache.flink.types.Row
 import org.apache.flink.configuration.Configuration
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow
@@ -27,7 +26,7 @@ import org.apache.flink.table.runtime.types.CRow
 import org.apache.flink.util.Collector
 
 /**
-  * Computes the final aggregate value from incrementally computed aggreagtes.
+  * Computes the final aggregate value from incrementally computed aggregates.
   *
   * @param numGroupingKey the number of grouping keys
   * @param numAggregates the number of aggregates

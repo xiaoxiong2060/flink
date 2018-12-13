@@ -29,12 +29,12 @@ import org.apache.flink.streaming.api.datastream.DataStream
 import org.apache.flink.streaming.api.environment.{StreamExecutionEnvironment => JExecEnv}
 import org.apache.flink.streaming.api.functions.ProcessFunction
 import org.apache.flink.streaming.api.scala.StreamExecutionEnvironment
-import org.apache.flink.streaming.util.StreamingMultipleProgramsTestBase
-import org.apache.flink.table.api.{TableEnvironment, TableException, TableSchema, Types}
 import org.apache.flink.table.api.scala._
+import org.apache.flink.table.api.{TableEnvironment, TableException, TableSchema, Types}
 import org.apache.flink.table.runtime.utils.{CommonTestData, StreamITCase}
 import org.apache.flink.table.sources.StreamTableSource
 import org.apache.flink.table.utils._
+import org.apache.flink.test.util.AbstractTestBase
 import org.apache.flink.types.Row
 import org.apache.flink.util.Collector
 import org.junit.Assert._
@@ -43,7 +43,7 @@ import org.junit.Test
 import scala.collection.JavaConverters._
 import scala.collection.mutable
 
-class TableSourceITCase extends StreamingMultipleProgramsTestBase {
+class TableSourceITCase extends AbstractTestBase {
 
   @Test(expected = classOf[TableException])
   def testInvalidDatastreamType(): Unit = {
@@ -295,6 +295,42 @@ class TableSourceITCase extends StreamingMultipleProgramsTestBase {
 
     val expected = Seq(
       "1970-01-01 00:00:00.0,3",
+      "1970-01-01 00:00:02.0,1",
+      "1970-01-01 00:00:04.0,1")
+    assertEquals(expected.sorted, StreamITCase.testResults.sorted)
+  }
+
+  @Test
+  def testRowtimeStringTableSource(): Unit = {
+    StreamITCase.testResults = mutable.MutableList()
+    val tableName = "MyTable"
+    val env = StreamExecutionEnvironment.getExecutionEnvironment
+    env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime)
+    val tEnv = TableEnvironment.getTableEnvironment(env)
+
+    val data = Seq(
+      "1970-01-01 00:00:00",
+      "1970-01-01 00:00:01",
+      "1970-01-01 00:00:01",
+      "1970-01-01 00:00:02",
+      "1970-01-01 00:00:04")
+
+    val schema = new TableSchema(Array("rtime"), Array(Types.SQL_TIMESTAMP))
+    val returnType = Types.STRING
+
+    val tableSource = new TestTableSourceWithTime(schema, returnType, data, "rtime", null)
+    tEnv.registerTableSource(tableName, tableSource)
+
+    tEnv.scan(tableName)
+      .window(Tumble over 1.second on 'rtime as 'w)
+      .groupBy('w)
+      .select('w.start, 1.count)
+      .addSink(new StreamITCase.StringSink[Row])
+    env.execute()
+
+    val expected = Seq(
+      "1970-01-01 00:00:00.0,1",
+      "1970-01-01 00:00:01.0,2",
       "1970-01-01 00:00:02.0,1",
       "1970-01-01 00:00:04.0,1")
     assertEquals(expected.sorted, StreamITCase.testResults.sorted)
@@ -741,4 +777,5 @@ class TableSourceITCase extends StreamingMultipleProgramsTestBase {
     val expected = Seq("(1,A,1)", "(6,C,10)", "(6,D,20)")
     assertEquals(expected.sorted, StreamITCase.testResults.sorted)
   }
+
 }

@@ -218,6 +218,11 @@ public class AbstractMetricsHandlerTest extends TestLogger {
 		public String getTargetRestEndpointURL() {
 			return "/";
 		}
+
+		@Override
+		public String getDescription() {
+			return "";
+		}
 	}
 
 	private static class TestMessageParameters extends MessageParameters {

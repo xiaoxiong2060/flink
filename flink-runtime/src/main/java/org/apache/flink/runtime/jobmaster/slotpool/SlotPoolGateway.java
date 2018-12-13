@@ -22,6 +22,7 @@ import org.apache.flink.api.common.time.Time;
 import org.apache.flink.runtime.clusterframework.types.AllocationID;
 import org.apache.flink.runtime.clusterframework.types.ResourceID;
 import org.apache.flink.runtime.clusterframework.types.ResourceProfile;
+import org.apache.flink.runtime.clusterframework.types.SlotProfile;
 import org.apache.flink.runtime.instance.SlotSharingGroupId;
 import org.apache.flink.runtime.jobmanager.scheduler.ScheduledUnit;
 import org.apache.flink.runtime.jobmanager.slots.TaskManagerGateway;
@@ -33,12 +34,13 @@ import org.apache.flink.runtime.rpc.RpcGateway;
 import org.apache.flink.runtime.rpc.RpcTimeout;
 import org.apache.flink.runtime.taskexecutor.slot.SlotOffer;
 import org.apache.flink.runtime.taskmanager.TaskManagerLocation;
+import org.apache.flink.types.SerializableOptional;
 
 import java.util.Collection;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * The gateway for calls on the {@link SlotPool}. 
+ * The gateway for calls on the {@link SlotPool}.
  */
 public interface SlotPoolGateway extends AllocatedSlotActions, RpcGateway {
 
@@ -55,7 +57,7 @@ public interface SlotPoolGateway extends AllocatedSlotActions, RpcGateway {
 	/**
 	 * Connects the SlotPool to the given ResourceManager. After this method is called, the
 	 * SlotPool will be able to request resources from the given ResourceManager.
-	 * 
+	 *
 	 * @param resourceManagerGateway  The RPC gateway for the resource manager.
 	 */
 	void connectToResourceManager(ResourceManagerGateway resourceManagerGateway);
@@ -64,7 +66,7 @@ public interface SlotPoolGateway extends AllocatedSlotActions, RpcGateway {
 	 * Disconnects the slot pool from its current Resource Manager. After this call, the pool will not
 	 * be able to request further slots from the Resource Manager, and all currently pending requests
 	 * to the resource manager will be canceled.
-	 * 
+	 *
 	 * <p>The slot pool will still be able to serve slots from its internal pool.
 	 */
 	void disconnectResourceManager();
@@ -84,10 +86,11 @@ public interface SlotPoolGateway extends AllocatedSlotActions, RpcGateway {
 	/**
 	 * Releases a TaskExecutor with the given {@link ResourceID} from the {@link SlotPool}.
 	 *
-	 * @param resourceID identifying the TaskExecutor which shall be released from the SlotPool
+	 * @param resourceId identifying the TaskExecutor which shall be released from the SlotPool
+	 * @param cause for the releasing of the TaskManager
 	 * @return Future acknowledge which is completed after the TaskExecutor has been released
 	 */
-	CompletableFuture<Acknowledge> releaseTaskManager(ResourceID resourceID);
+	CompletableFuture<Acknowledge> releaseTaskManager(final ResourceID resourceId, final Exception cause);
 
 	/**
 	 * Offers a slot to the {@link SlotPool}. The slot offer can be accepted or
@@ -108,7 +111,7 @@ public interface SlotPoolGateway extends AllocatedSlotActions, RpcGateway {
 	 * individually accepted or rejected by returning the collection of accepted
 	 * slot offers.
 	 *
-	 * @param taskManagerLocation from which the slot offeres originate
+	 * @param taskManagerLocation from which the slot offers originate
 	 * @param taskManagerGateway to talk to the slot offerer
 	 * @param offers slot offers which are offered to the {@link SlotPool}
 	 * @return A collection of accepted slot offers (future). The remaining slot offers are
@@ -124,8 +127,9 @@ public interface SlotPoolGateway extends AllocatedSlotActions, RpcGateway {
 	 *
 	 * @param allocationID identifying the slot which is being failed
 	 * @param cause of the failure
+	 * @return An optional task executor id if this task executor has no more slots registered
 	 */
-	void failAllocation(AllocationID allocationID, Exception cause);
+	CompletableFuture<SerializableOptional<ResourceID>> failAllocation(AllocationID allocationID, Exception cause);
 
 	// ------------------------------------------------------------------------
 	//  allocating and disposing slots
@@ -143,17 +147,15 @@ public interface SlotPoolGateway extends AllocatedSlotActions, RpcGateway {
 	 *
 	 * @param slotRequestId identifying the requested slot
 	 * @param scheduledUnit for which to allocate slot
-	 * @param resourceProfile which the allocated slot must fulfill
-	 * @param locationPreferences which define where the allocated slot should be placed, this can also be empty
+	 * @param slotProfile profile that specifies the requirements for the requested slot
 	 * @param allowQueuedScheduling true if the slot request can be queued (e.g. the returned future must not be completed)
 	 * @param timeout for the operation
-	 * @return
+	 * @return Future which is completed with the allocated {@link LogicalSlot}
 	 */
 	CompletableFuture<LogicalSlot> allocateSlot(
 			SlotRequestId slotRequestId,
 			ScheduledUnit scheduledUnit,
-			ResourceProfile resourceProfile,
-			Collection<TaskManagerLocation> locationPreferences,
+			SlotProfile slotProfile,
 			boolean allowQueuedScheduling,
 			@RpcTimeout Time timeout);
 }

@@ -19,6 +19,7 @@
 package org.apache.flink.runtime.rest.messages.job.metrics;
 
 import org.apache.flink.runtime.rest.messages.JobIDPathParameter;
+import org.apache.flink.util.TestLogger;
 
 import org.junit.Test;
 
@@ -29,7 +30,7 @@ import static org.junit.Assert.assertThat;
 /**
  * Tests for {@link JobMetricsHeaders}.
  */
-public class JobMetricsHeadersTest {
+public class JobMetricsHeadersTest extends TestLogger {
 
 	private final JobMetricsHeaders jobMetricsHeaders = JobMetricsHeaders.getInstance();
 

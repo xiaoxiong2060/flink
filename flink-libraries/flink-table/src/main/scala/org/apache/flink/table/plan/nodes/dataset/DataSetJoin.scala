@@ -34,7 +34,7 @@ import org.apache.flink.api.common.operators.base.JoinOperatorBase.JoinHint
 import org.apache.flink.api.common.typeinfo.TypeInformation
 import org.apache.flink.api.java.DataSet
 import org.apache.flink.api.java.typeutils.RowTypeInfo
-import org.apache.flink.table.api.{BatchTableEnvironment, TableConfig, TableException, Types}
+import org.apache.flink.table.api.{BatchQueryConfig, BatchTableEnvironment, TableConfig, TableException, Types}
 import org.apache.flink.table.calcite.FlinkTypeFactory
 import org.apache.flink.table.codegen.{FunctionCodeGenerator, GeneratedFunction}
 import org.apache.flink.table.plan.nodes.CommonJoin
@@ -115,7 +115,9 @@ class DataSetJoin(
     planner.getCostFactory.makeCost(rowCnt, cpuCost, ioCost)
   }
 
-  override def translateToPlan(tableEnv: BatchTableEnvironment): DataSet[Row] = {
+  override def translateToPlan(
+      tableEnv: BatchTableEnvironment,
+      queryConfig: BatchQueryConfig): DataSet[Row] = {
 
     val config = tableEnv.getConfig
 
@@ -126,7 +128,7 @@ class DataSetJoin(
     val rightKeys = ArrayBuffer.empty[Int]
     if (keyPairs.isEmpty) {
       // if no equality keys => not supported
-      throw TableException(
+      throw new TableException(
         "Joins should have at least one equality condition.\n" +
           s"\tLeft: ${left.toString},\n" +
           s"\tRight: ${right.toString},\n" +
@@ -149,7 +151,7 @@ class DataSetJoin(
           leftKeys.add(pair.source)
           rightKeys.add(pair.target)
         } else {
-          throw TableException(
+          throw new TableException(
             "Equality join predicate on incompatible types.\n" +
               s"\tLeft: ${left.toString},\n" +
               s"\tRight: ${right.toString},\n" +
@@ -160,8 +162,8 @@ class DataSetJoin(
       })
     }
 
-    val leftDataSet = left.asInstanceOf[DataSetRel].translateToPlan(tableEnv)
-    val rightDataSet = right.asInstanceOf[DataSetRel].translateToPlan(tableEnv)
+    val leftDataSet = left.asInstanceOf[DataSetRel].translateToPlan(tableEnv, queryConfig)
+    val rightDataSet = right.asInstanceOf[DataSetRel].translateToPlan(tableEnv, queryConfig)
 
     joinType match {
       case JoinRelType.INNER =>
@@ -253,7 +255,7 @@ class DataSetJoin(
       config: TableConfig): DataSet[Row] = {
 
     if (!config.getNullCheck) {
-      throw TableException("Null check in TableConfig must be enabled for outer joins.")
+      throw new TableException("Null check in TableConfig must be enabled for outer joins.")
     }
 
     val joinOpName = getJoinOpName
@@ -309,7 +311,7 @@ class DataSetJoin(
       config: TableConfig): DataSet[Row] = {
 
     if (!config.getNullCheck) {
-      throw TableException("Null check in TableConfig must be enabled for outer joins.")
+      throw new TableException("Null check in TableConfig must be enabled for outer joins.")
     }
 
     val joinOpName = getJoinOpName
@@ -365,7 +367,7 @@ class DataSetJoin(
       config: TableConfig): DataSet[Row] = {
 
     if (!config.getNullCheck) {
-      throw TableException("Null check in TableConfig must be enabled for outer joins.")
+      throw new TableException("Null check in TableConfig must be enabled for outer joins.")
     }
 
     val joinOpName = getJoinOpName
@@ -441,11 +443,11 @@ class DataSetJoin(
       s"join: (${joinSelectionToString(joinRowType)})"
   }
 
-  /** Returns an array of indicies with some indicies being a prefix. */
+  /** Returns an array of indices with some indices being a prefix. */
   private def getFullIndiciesWithPrefix(keys: Array[Int], numFields: Int): Array[Int] = {
-    // get indicies of all fields which are not keys
+    // get indices of all fields which are not keys
     val nonKeys = (0 until numFields).filter(!keys.contains(_))
-    // return all field indicies prefixed by keys
+    // return all field indices prefixed by keys
     keys ++ nonKeys
   }
 

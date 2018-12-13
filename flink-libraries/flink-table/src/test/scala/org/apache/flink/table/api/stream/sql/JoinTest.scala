@@ -21,6 +21,7 @@ import org.apache.calcite.rel.logical.LogicalJoin
 import org.apache.flink.api.scala._
 import org.apache.flink.table.api.Types
 import org.apache.flink.table.api.scala._
+import org.apache.flink.table.calcite.RelTimeIndicatorConverter
 import org.apache.flink.table.expressions.Null
 import org.apache.flink.table.plan.logical.TumblingGroupWindow
 import org.apache.flink.table.runtime.join.WindowJoinUtil
@@ -29,11 +30,15 @@ import org.apache.flink.table.utils.{StreamTableTestUtil, TableTestBase}
 import org.junit.Assert._
 import org.junit.Test
 
+/**
+  * Tests for both windowed and non-windowed joins.
+  */
 class JoinTest extends TableTestBase {
   private val streamUtil: StreamTableTestUtil = streamTestUtil()
   streamUtil.addTable[(Int, String, Long)]("MyTable", 'a, 'b, 'c.rowtime, 'proctime.proctime)
   streamUtil.addTable[(Int, String, Long)]("MyTable2", 'a, 'b, 'c.rowtime, 'proctime.proctime)
 
+  // Tests for inner join
   @Test
   def testProcessingTimeInnerJoinWithOnClause(): Unit = {
 
@@ -61,8 +66,8 @@ class JoinTest extends TableTestBase {
             term("select", "a", "b", "proctime")
           ),
           term("where",
-            "AND(=(a, a0), >=(proctime, -(proctime0, 3600000)), " +
-              "<=(proctime, DATETIME_PLUS(proctime0, 3600000)))"),
+            "AND(=(a, a0), >=(PROCTIME(proctime), -(PROCTIME(proctime0), 3600000)), " +
+              "<=(PROCTIME(proctime), +(PROCTIME(proctime0), 3600000)))"),
           term("join", "a, proctime, a0, b, proctime0"),
           term("joinType", "InnerJoin")
         ),
@@ -99,8 +104,8 @@ class JoinTest extends TableTestBase {
             term("select", "a", "b", "c")
           ),
           term("where",
-            "AND(=(a, a0), >=(c, -(c0, 10000)), " +
-              "<=(c, DATETIME_PLUS(c0, 3600000)))"),
+            "AND(=(a, a0), >=(CAST(c), -(CAST(c0), 10000)), " +
+              "<=(CAST(c), +(CAST(c0), 3600000)))"),
           term("join", "a, c, a0, b, c0"),
           term("joinType", "InnerJoin")
         ),
@@ -137,8 +142,8 @@ class JoinTest extends TableTestBase {
             term("select", "a", "b", "proctime")
           ),
           term("where",
-            "AND(=(a, a0), >=(proctime, -(proctime0, 3600000)), " +
-              "<=(proctime, DATETIME_PLUS(proctime0, 3600000)))"),
+            "AND(=(a, a0), >=(PROCTIME(proctime), -(PROCTIME(proctime0), 3600000)), " +
+              "<=(PROCTIME(proctime), +(PROCTIME(proctime0), 3600000)))"),
           term("join", "a, proctime, a0, b, proctime0"),
           term("joinType", "InnerJoin")
         ),
@@ -175,8 +180,8 @@ class JoinTest extends TableTestBase {
             term("select", "a", "b", "c")
           ),
           term("where",
-            "AND(=(a, a0), >=(c, -(c0, 600000)), " +
-              "<=(c, DATETIME_PLUS(c0, 3600000)))"),
+            "AND(=(a, a0), >=(CAST(c), -(CAST(c0), 600000)), " +
+              "<=(CAST(c), +(CAST(c0), 3600000)))"),
           term("join", "a, c, a0, b, c0"),
           term("joinType", "InnerJoin")
         ),
@@ -207,7 +212,7 @@ class JoinTest extends TableTestBase {
             streamTableNode(1),
             term("select", "a", "b", "proctime")
           ),
-          term("where", "AND(=(a, a0), =(proctime, proctime0))"),
+          term("where", "AND(=(a, a0), =(PROCTIME(proctime), PROCTIME(proctime0)))"),
           term("join", "a", "proctime", "a0", "b", "proctime0"),
           term("joinType", "InnerJoin")
         ),
@@ -237,7 +242,7 @@ class JoinTest extends TableTestBase {
             streamTableNode(1),
             term("select", "a", "b", "c")
           ),
-          term("where", "AND(=(a, a0), =(c, c0))"),
+          term("where", "AND(=(a, a0), =(CAST(c), CAST(c0)))"),
           term("join", "a", "c", "a0", "b", "c0"),
           term("joinType", "InnerJoin")
         ),
@@ -279,8 +284,8 @@ class JoinTest extends TableTestBase {
             streamTableNode(1),
             term("select", "a", "c", "proctime", "12 AS nullField")
           ),
-          term("where", "AND(=(a, a0), =(nullField, nullField0), >=(proctime, " +
-            "-(proctime0, 5000)), <=(proctime, DATETIME_PLUS(proctime0, 5000)))"),
+          term("where", "AND(=(a, a0), =(nullField, nullField0), >=(PROCTIME(proctime), " +
+            "-(PROCTIME(proctime0), 5000)), <=(PROCTIME(proctime), +(PROCTIME(proctime0), 5000)))"),
           term("join", "a", "c", "proctime", "nullField", "a0", "c0", "proctime0", "nullField0"),
           term("joinType", "InnerJoin")
         ),
@@ -319,8 +324,8 @@ class JoinTest extends TableTestBase {
               term("select", "a", "b", "c")
             ),
             term("where",
-              "AND(=(a, a0), >=(c, -(c0, 600000)), " +
-                "<=(c, DATETIME_PLUS(c0, 3600000)))"),
+              "AND(=(a, a0), >=(CAST(c), -(CAST(c0), 600000)), " +
+                "<=(CAST(c), +(CAST(c0), 3600000)))"),
             term("join", "a, b, c, a0, b0, c0"),
             term("joinType", "InnerJoin")
           ),
@@ -364,8 +369,8 @@ class JoinTest extends TableTestBase {
               term("select", "a", "b", "c")
             ),
             term("where",
-              "AND(=(a, a0), >=(c, -(c0, 600000)), " +
-                "<=(c, DATETIME_PLUS(c0, 3600000)))"),
+              "AND(=(a, a0), >=(CAST(c), -(CAST(c0), 600000)), " +
+                "<=(CAST(c), +(CAST(c0), 3600000)))"),
             term("join", "a, b, c, a0, b0, c0"),
             term("joinType", "InnerJoin")
           ),
@@ -379,6 +384,280 @@ class JoinTest extends TableTestBase {
     streamUtil.verifySql(sqlQuery, expected)
   }
 
+  // Tests for left outer join
+  @Test
+  def testProcTimeLeftOuterJoin(): Unit = {
+
+    val sqlQuery =
+      """
+        |SELECT t1.a, t2.b
+        |FROM MyTable t1 LEFT OUTER JOIN MyTable2 t2 ON
+        |  t1.a = t2.a AND
+        |  t1.proctime BETWEEN t2.proctime - INTERVAL '1' HOUR AND t2.proctime + INTERVAL '1' HOUR
+        |""".stripMargin
+
+    val expected =
+      unaryNode(
+        "DataStreamCalc",
+        binaryNode(
+          "DataStreamWindowJoin",
+          unaryNode(
+            "DataStreamCalc",
+            streamTableNode(0),
+            term("select", "a", "proctime")
+          ),
+          unaryNode(
+            "DataStreamCalc",
+            streamTableNode(1),
+            term("select", "a", "b", "proctime")
+          ),
+          term("where",
+            "AND(=(a, a0), >=(PROCTIME(proctime), -(PROCTIME(proctime0), 3600000)), " +
+              "<=(PROCTIME(proctime), +(PROCTIME(proctime0), 3600000)))"),
+          term("join", "a, proctime, a0, b, proctime0"),
+          term("joinType", "LeftOuterJoin")
+        ),
+        term("select", "a", "b")
+      )
+
+    streamUtil.verifySql(sqlQuery, expected)
+  }
+
+  @Test
+  def testRowTimeLeftOuterJoin(): Unit = {
+
+    val sqlQuery =
+      """
+        |SELECT t1.a, t2.b
+        |FROM MyTable t1 LEFT OUTER JOIN MyTable2 t2 ON
+        |  t1.a = t2.a AND
+        |  t1.c BETWEEN t2.c - INTERVAL '10' SECOND AND t2.c + INTERVAL '1' HOUR
+        |""".stripMargin
+
+    val expected =
+      unaryNode(
+        "DataStreamCalc",
+        binaryNode(
+          "DataStreamWindowJoin",
+          unaryNode(
+            "DataStreamCalc",
+            streamTableNode(0),
+            term("select", "a", "c")
+          ),
+          unaryNode(
+            "DataStreamCalc",
+            streamTableNode(1),
+            term("select", "a", "b", "c")
+          ),
+          term("where",
+            "AND(=(a, a0), >=(CAST(c), -(CAST(c0), 10000)), " +
+              "<=(CAST(c), +(CAST(c0), 3600000)))"),
+          term("join", "a, c, a0, b, c0"),
+          term("joinType", "LeftOuterJoin")
+        ),
+        term("select", "a", "b")
+      )
+
+    streamUtil.verifySql(sqlQuery, expected)
+  }
+
+  // Tests for right outer join
+  @Test
+  def testProcTimeRightOuterJoin(): Unit = {
+
+    val sqlQuery =
+      """
+        |SELECT t1.a, t2.b
+        |FROM MyTable t1 RIGHT OUTER JOIN MyTable2 t2 ON
+        |  t1.a = t2.a AND
+        |  t1.proctime BETWEEN t2.proctime - INTERVAL '1' HOUR AND t2.proctime + INTERVAL '1' HOUR
+        |""".stripMargin
+
+    val expected =
+      unaryNode(
+        "DataStreamCalc",
+        binaryNode(
+          "DataStreamWindowJoin",
+          unaryNode(
+            "DataStreamCalc",
+            streamTableNode(0),
+            term("select", "a", "proctime")
+          ),
+          unaryNode(
+            "DataStreamCalc",
+            streamTableNode(1),
+            term("select", "a", "b", "proctime")
+          ),
+          term("where",
+            "AND(=(a, a0), >=(PROCTIME(proctime), -(PROCTIME(proctime0), 3600000)), " +
+              "<=(PROCTIME(proctime), +(PROCTIME(proctime0), 3600000)))"),
+          term("join", "a, proctime, a0, b, proctime0"),
+          term("joinType", "RightOuterJoin")
+        ),
+        term("select", "a", "b")
+      )
+
+    streamUtil.verifySql(sqlQuery, expected)
+  }
+
+  @Test
+  def testRowTimeRightOuterJoin(): Unit = {
+
+    val sqlQuery =
+      """
+        |SELECT t1.a, t2.b
+        |FROM MyTable t1 RIGHT OUTER JOIN MyTable2 t2 ON
+        |  t1.a = t2.a AND
+        |  t1.c BETWEEN t2.c - INTERVAL '10' SECOND AND t2.c + INTERVAL '1' HOUR
+        |""".stripMargin
+
+    val expected =
+      unaryNode(
+        "DataStreamCalc",
+        binaryNode(
+          "DataStreamWindowJoin",
+          unaryNode(
+            "DataStreamCalc",
+            streamTableNode(0),
+            term("select", "a", "c")
+          ),
+          unaryNode(
+            "DataStreamCalc",
+            streamTableNode(1),
+            term("select", "a", "b", "c")
+          ),
+          term("where",
+            "AND(=(a, a0), >=(CAST(c), -(CAST(c0), 10000)), " +
+              "<=(CAST(c), +(CAST(c0), 3600000)))"),
+          term("join", "a, c, a0, b, c0"),
+          term("joinType", "RightOuterJoin")
+        ),
+        term("select", "a", "b")
+      )
+
+    streamUtil.verifySql(sqlQuery, expected)
+  }
+
+  // Tests for full outer join
+  @Test
+  def testProcTimeFullOuterJoin(): Unit = {
+
+    val sqlQuery =
+      """
+        |SELECT t1.a, t2.b
+        |FROM MyTable t1 Full OUTER JOIN MyTable2 t2 ON
+        |  t1.a = t2.a AND
+        |  t1.proctime BETWEEN t2.proctime - INTERVAL '1' HOUR AND t2.proctime + INTERVAL '1' HOUR
+        |""".stripMargin
+
+    val expected =
+      unaryNode(
+        "DataStreamCalc",
+        binaryNode(
+          "DataStreamWindowJoin",
+          unaryNode(
+            "DataStreamCalc",
+            streamTableNode(0),
+            term("select", "a", "proctime")
+          ),
+          unaryNode(
+            "DataStreamCalc",
+            streamTableNode(1),
+            term("select", "a", "b", "proctime")
+          ),
+          term("where",
+            "AND(=(a, a0), >=(PROCTIME(proctime), -(PROCTIME(proctime0), 3600000)), " +
+              "<=(PROCTIME(proctime), +(PROCTIME(proctime0), 3600000)))"),
+          term("join", "a, proctime, a0, b, proctime0"),
+          term("joinType", "FullOuterJoin")
+        ),
+        term("select", "a", "b")
+      )
+
+    streamUtil.verifySql(sqlQuery, expected)
+  }
+
+  @Test
+  def testRowTimeFullOuterJoin(): Unit = {
+
+    val sqlQuery =
+      """
+        |SELECT t1.a, t2.b
+        |FROM MyTable t1 FULL OUTER JOIN MyTable2 t2 ON
+        |  t1.a = t2.a AND
+        |  t1.c BETWEEN t2.c - INTERVAL '10' SECOND AND t2.c + INTERVAL '1' HOUR
+        |""".stripMargin
+
+    val expected =
+      unaryNode(
+        "DataStreamCalc",
+        binaryNode(
+          "DataStreamWindowJoin",
+          unaryNode(
+            "DataStreamCalc",
+            streamTableNode(0),
+            term("select", "a", "c")
+          ),
+          unaryNode(
+            "DataStreamCalc",
+            streamTableNode(1),
+            term("select", "a", "b", "c")
+          ),
+          term("where",
+            "AND(=(a, a0), >=(CAST(c), -(CAST(c0), 10000)), " +
+              "<=(CAST(c), +(CAST(c0), 3600000)))"),
+          term("join", "a, c, a0, b, c0"),
+          term("joinType", "FullOuterJoin")
+        ),
+        term("select", "a", "b")
+      )
+
+    streamUtil.verifySql(sqlQuery, expected)
+  }
+
+  // Test for outer join optimization
+  @Test
+  def testOuterJoinOpt(): Unit = {
+
+    val sqlQuery =
+      """
+        |SELECT t1.a, t2.b
+        |FROM MyTable t1 FULL OUTER JOIN MyTable2 t2 ON
+        |  t1.a = t2.a AND
+        |  t1.c BETWEEN t2.c - INTERVAL '10' SECOND AND t2.c + INTERVAL '1' HOUR
+        |  WHERE t1.b LIKE t2.b
+        |""".stripMargin
+
+    val expected =
+      unaryNode(
+        "DataStreamCalc",
+        binaryNode(
+          "DataStreamWindowJoin",
+          unaryNode(
+            "DataStreamCalc",
+            streamTableNode(0),
+            term("select", "a", "b", "c")
+          ),
+          unaryNode(
+            "DataStreamCalc",
+            streamTableNode(1),
+            term("select", "a", "b", "c")
+          ),
+          term("where",
+            "AND(=(a, a0), >=(CAST(c), -(CAST(c0), 10000)), " +
+              "<=(CAST(c), +(CAST(c0), 3600000)), LIKE(b, b0))"),
+          term("join", "a, b, c, a0, b0, c0"),
+          // Since we filter on attributes b and b0 after the join, the full outer join
+          // will be automatically optimized to inner join.
+          term("joinType", "InnerJoin")
+        ),
+        term("select", "a", "b0 AS b")
+      )
+
+    streamUtil.verifySql(sqlQuery, expected)
+  }
+
+  // Other tests
   @Test
   def testJoinTimeBoundary(): Unit = {
     verifyTimeBoundary(
@@ -511,6 +790,196 @@ class JoinTest extends TableTestBase {
       "AND(=($0, $4), >($2, $6))")
   }
 
+  @Test
+  def testLeftOuterJoinEquiPred(): Unit = {
+    val util = streamTestUtil()
+    util.addTable[(Int, Long, String)]("t", 'a, 'b, 'c)
+    util.addTable[(Long, String, Int)]("s", 'x, 'y, 'z)
+
+    val query = "SELECT b, y FROM t LEFT OUTER JOIN s ON a = z"
+    val result = util.tableEnv.sqlQuery(query)
+
+    val expected = unaryNode(
+      "DataStreamCalc",
+      binaryNode(
+        "DataStreamJoin",
+        unaryNode(
+          "DataStreamCalc",
+          streamTableNode(0),
+          term("select", "a", "b")
+        ),
+        unaryNode(
+          "DataStreamCalc",
+          streamTableNode(1),
+          term("select", "y", "z")
+        ),
+        term("where", "=(a, z)"),
+        term("join", "a", "b", "y", "z"),
+        term("joinType", "LeftOuterJoin")
+      ),
+      term("select", "b", "y")
+    )
+
+    util.verifyTable(result, expected)
+  }
+
+  @Test
+  def testLeftOuterJoinEquiAndLocalPred(): Unit = {
+    val util = streamTestUtil()
+    util.addTable[(Int, Long, String)]("t", 'a, 'b, 'c)
+    util.addTable[(Long, String, Int)]("s", 'x, 'y, 'z)
+
+    val query = "SELECT b, y FROM t LEFT OUTER JOIN s ON a = z AND b < 2"
+    val result = util.tableEnv.sqlQuery(query)
+
+    val expected = unaryNode(
+      "DataStreamCalc",
+      binaryNode(
+        "DataStreamJoin",
+        unaryNode(
+          "DataStreamCalc",
+          streamTableNode(0),
+          term("select", "a", "b", "<(b, 2) AS $f3")
+        ),
+        unaryNode(
+          "DataStreamCalc",
+          streamTableNode(1),
+          term("select", "y", "z")
+        ),
+        term("where", "AND(=(a, z), $f3)"),
+        term("join", "a", "b", "$f3", "y", "z"),
+        term("joinType", "LeftOuterJoin")
+      ),
+      term("select", "b", "y")
+    )
+
+    util.verifyTable(result, expected)
+  }
+
+  @Test
+  def testLeftOuterJoinEquiAndNonEquiPred(): Unit = {
+    val util = streamTestUtil()
+    util.addTable[(Int, Long, String)]("t", 'a, 'b, 'c)
+    util.addTable[(Long, String, Int)]("s", 'x, 'y, 'z)
+
+    val query = "SELECT b, y FROM t LEFT OUTER JOIN s ON a = z AND b < x"
+    val result = util.tableEnv.sqlQuery(query)
+
+    val expected = unaryNode(
+      "DataStreamCalc",
+      binaryNode(
+        "DataStreamJoin",
+        unaryNode(
+          "DataStreamCalc",
+          streamTableNode(0),
+          term("select", "a", "b")
+        ),
+        streamTableNode(1),
+        term("where", "AND(=(a, z), <(b, x))"),
+        term("join", "a", "b", "x", "y", "z"),
+        term("joinType", "LeftOuterJoin")
+      ),
+      term("select", "b", "y")
+    )
+
+    util.verifyTable(result, expected)
+  }
+
+  @Test
+  def testRightOuterJoinEquiPred(): Unit = {
+    val util = streamTestUtil()
+    util.addTable[(Int, Long, String)]("t", 'a, 'b, 'c)
+    util.addTable[(Long, String, Int)]("s", 'x, 'y, 'z)
+
+    val query = "SELECT b, y FROM t RIGHT OUTER JOIN s ON a = z"
+    val result = util.tableEnv.sqlQuery(query)
+
+    val expected = unaryNode(
+      "DataStreamCalc",
+      binaryNode(
+        "DataStreamJoin",
+        unaryNode(
+          "DataStreamCalc",
+          streamTableNode(0),
+          term("select", "a", "b")
+        ),
+        unaryNode(
+          "DataStreamCalc",
+          streamTableNode(1),
+          term("select", "y", "z")
+        ),
+        term("where", "=(a, z)"),
+        term("join", "a", "b", "y", "z"),
+        term("joinType", "RightOuterJoin")
+      ),
+      term("select", "b", "y")
+    )
+
+    util.verifyTable(result, expected)
+  }
+
+  @Test
+  def testRightOuterJoinEquiAndLocalPred(): Unit = {
+    val util = streamTestUtil()
+    util.addTable[(Int, Long, String)]("t", 'a, 'b, 'c)
+    util.addTable[(Long, String, Int)]("s", 'x, 'y, 'z)
+
+    val query = "SELECT b, x FROM t RIGHT OUTER JOIN s ON a = z AND x < 2"
+    val result = util.tableEnv.sqlQuery(query)
+
+    val expected = unaryNode(
+      "DataStreamCalc",
+      binaryNode(
+        "DataStreamJoin",
+        unaryNode(
+          "DataStreamCalc",
+          streamTableNode(0),
+          term("select", "a", "b")
+        ),
+        unaryNode(
+          "DataStreamCalc",
+          streamTableNode(1),
+          term("select", "x", "z", "<(x, 2) AS $f3")
+        ),
+        term("where", "AND(=(a, z), $f3)"),
+        term("join", "a", "b", "x", "z", "$f3"),
+        term("joinType", "RightOuterJoin")
+      ),
+      term("select", "b", "x")
+    )
+
+    util.verifyTable(result, expected)
+  }
+
+  @Test
+  def testRightOuterJoinEquiAndNonEquiPred(): Unit = {
+    val util = streamTestUtil()
+    util.addTable[(Int, Long, String)]("t", 'a, 'b, 'c)
+    util.addTable[(Long, String, Int)]("s", 'x, 'y, 'z)
+
+    val query = "SELECT b, y FROM t RIGHT OUTER JOIN s ON a = z AND b < x"
+    val result = util.tableEnv.sqlQuery(query)
+
+    val expected = unaryNode(
+      "DataStreamCalc",
+      binaryNode(
+        "DataStreamJoin",
+        unaryNode(
+          "DataStreamCalc",
+          streamTableNode(0),
+          term("select", "a", "b")
+        ),
+        streamTableNode(1),
+        term("where", "AND(=(a, z), <(b, x))"),
+        term("join", "a", "b", "x", "y", "z"),
+        term("joinType", "RightOuterJoin")
+      ),
+      term("select", "b", "y")
+    )
+
+    util.verifyTable(result, expected)
+  }
+
   private def verifyTimeBoundary(
       timeSql: String,
       expLeftSize: Long,
@@ -520,7 +989,9 @@ class JoinTest extends TableTestBase {
       "SELECT t1.a, t2.b FROM MyTable as t1 join MyTable2 as t2 on t1.a = t2.a and " + timeSql
 
     val resultTable = streamUtil.tableEnv.sqlQuery(query)
-    val relNode = resultTable.getRelNode
+    val relNode = RelTimeIndicatorConverter.convert(
+      resultTable.getRelNode,
+      streamUtil.tableEnv.getRelBuilder.getRexBuilder)
     val joinNode = relNode.getInput(0).asInstanceOf[LogicalJoin]
     val (windowBounds, _) =
       WindowJoinUtil.extractWindowBoundsFromPredicate(
@@ -543,7 +1014,9 @@ class JoinTest extends TableTestBase {
       expectCondStr: String): Unit = {
 
     val resultTable = streamUtil.tableEnv.sqlQuery(query)
-    val relNode = resultTable.getRelNode
+    val relNode = RelTimeIndicatorConverter.convert(
+      resultTable.getRelNode,
+      streamUtil.tableEnv.getRelBuilder.getRexBuilder)
     val joinNode = relNode.getInput(0).asInstanceOf[LogicalJoin]
     val (_, remainCondition) =
       WindowJoinUtil.extractWindowBoundsFromPredicate(

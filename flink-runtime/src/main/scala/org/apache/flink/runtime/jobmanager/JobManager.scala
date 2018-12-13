@@ -39,18 +39,18 @@ import org.apache.flink.runtime.accumulators.AccumulatorSnapshot
 import org.apache.flink.runtime.akka.{AkkaUtils, ListeningBehaviour}
 import org.apache.flink.runtime.blob.{BlobServer, BlobStore}
 import org.apache.flink.runtime.checkpoint._
-import org.apache.flink.runtime.checkpoint.savepoint.SavepointStore
 import org.apache.flink.runtime.client._
-import org.apache.flink.runtime.clusterframework.{BootstrapTools, FlinkResourceManager}
 import org.apache.flink.runtime.clusterframework.messages._
 import org.apache.flink.runtime.clusterframework.standalone.StandaloneResourceManager
 import org.apache.flink.runtime.clusterframework.types.ResourceID
+import org.apache.flink.runtime.clusterframework.{BootstrapTools, FlinkResourceManager}
+import org.apache.flink.runtime.concurrent.Executors.directExecutionContext
 import org.apache.flink.runtime.concurrent.{FutureUtils, ScheduledExecutorServiceAdapter}
 import org.apache.flink.runtime.execution.SuppressRestartsException
 import org.apache.flink.runtime.execution.librarycache.FlinkUserCodeClassLoaders.ResolveOrder
 import org.apache.flink.runtime.execution.librarycache.{BlobLibraryCacheManager, LibraryCacheManager}
 import org.apache.flink.runtime.executiongraph._
-import org.apache.flink.runtime.executiongraph.restart.RestartStrategyFactory
+import org.apache.flink.runtime.executiongraph.restart.{RestartStrategyFactory, RestartStrategyResolving}
 import org.apache.flink.runtime.highavailability.HighAvailabilityServicesUtils.AddressResolution
 import org.apache.flink.runtime.highavailability.{HighAvailabilityServices, HighAvailabilityServicesUtils}
 import org.apache.flink.runtime.instance.{AkkaActorGateway, InstanceID, InstanceManager}
@@ -156,7 +156,8 @@ class JobManager(
   var futuresToComplete: Option[Seq[Future[Unit]]] = None
 
   /** The default directory for savepoints. */
-  val defaultSavepointDir: String = flinkConfiguration.getString(CoreOptions.SAVEPOINT_DIRECTORY)
+  val defaultSavepointDir: String = 
+    flinkConfiguration.getString(CheckpointingOptions.SAVEPOINT_DIRECTORY)
 
   /** The resource manager actor responsible for allocating and managing task manager resources. */
   var currentResourceManager: Option[ActorRef] = None
@@ -349,7 +350,7 @@ class JobManager(
           hardwareInformation,
           numberOfSlots) =>
       // we are being informed by the ResourceManager that a new task manager is available
-      log.debug(s"RegisterTaskManager: $msg")
+      log.info(s"RegisterTaskManager: $msg")
 
       val taskManager = sender()
 
@@ -490,7 +491,8 @@ class JobManager(
 
             Option(submittedJobGraphOption) match {
               case Some(submittedJobGraph) =>
-                if (!leaderElectionService.hasLeadership()) {
+                if (leaderSessionID.isEmpty ||
+                  !leaderElectionService.hasLeadership(leaderSessionID.get)) {
                   // we've lost leadership. mission: abort.
                   log.warn(s"Lost leadership during recovery. Aborting recovery of $jobId.")
                 } else {
@@ -501,7 +503,11 @@ class JobManager(
             }
           }
         } catch {
-          case t: Throwable => log.warn(s"Failed to recover job $jobId.", t)
+          case t: Throwable => {
+            log.error(s"Failed to recover job $jobId.", t)
+            // stop one self in order to be restarted and trying to recover the jobs again
+            context.stop(self)
+          }
         }
       }(context.dispatcher)
 
@@ -523,9 +529,12 @@ class JobManager(
             }
           }
         } catch {
-          case e: Exception =>
-            log.warn("Failed to recover job ids from submitted job graph store. Aborting " +
-                       "recovery.", e)
+          case e: Exception => {
+            log.error("Failed to recover job ids from submitted job graph store. Aborting " +
+              "recovery.", e)
+            // stop one self in order to be restarted and trying to recover the jobs again
+            context.stop(self)
+          }
         }
       }(context.dispatcher)
 
@@ -551,31 +560,31 @@ class JobManager(
 
     case CancelJobWithSavepoint(jobId, savepointDirectory) =>
       try {
-        val targetDirectory = if (savepointDirectory != null) {
-          savepointDirectory
-        } else {
-          defaultSavepointDir
-        }
+        log.info(s"Trying to cancel job $jobId with savepoint to $savepointDirectory")
 
-        if (targetDirectory == null) {
-          log.info(s"Trying to cancel job $jobId with savepoint, but no " +
-            "savepoint directory configured.")
+        currentJobs.get(jobId) match {
+          case Some((executionGraph, _)) =>
+            val coord = executionGraph.getCheckpointCoordinator
 
-          sender ! decorateMessage(CancellationFailure(jobId, new IllegalStateException(
-            "No savepoint directory configured. You can either specify a directory " +
-              "while cancelling via -s :targetDirectory or configure a cluster-wide " +
-              "default via key '" + CoreOptions.SAVEPOINT_DIRECTORY.key() + "'.")))
-        } else {
-          log.info(s"Trying to cancel job $jobId with savepoint to $targetDirectory")
+            if (coord == null) {
+              sender ! decorateMessage(CancellationFailure(jobId, new IllegalStateException(
+                s"Job $jobId is not a streaming job.")))
+            }
+            else if (savepointDirectory == null &&
+                  !coord.getCheckpointStorage.hasDefaultSavepointLocation) {
+              log.info(s"Trying to cancel job $jobId with savepoint, but no " +
+                "savepoint directory configured.")
 
-          currentJobs.get(jobId) match {
-            case Some((executionGraph, _)) =>
+              sender ! decorateMessage(CancellationFailure(jobId, new IllegalStateException(
+                "No savepoint directory configured. You can either specify a directory " +
+                  "while cancelling via -s :targetDirectory or configure a cluster-wide " +
+                  "default via key '" + CheckpointingOptions.SAVEPOINT_DIRECTORY.key() + "'.")))
+            } else {
               // We don't want any checkpoint between the savepoint and cancellation
-              val coord = executionGraph.getCheckpointCoordinator
               coord.stopCheckpointScheduler()
 
               // Trigger the savepoint
-              val future = coord.triggerSavepoint(System.currentTimeMillis(), targetDirectory)
+              val future = coord.triggerSavepoint(System.currentTimeMillis(), savepointDirectory)
 
               val senderRef = sender()
               future.handleAsync[Void](
@@ -607,15 +616,15 @@ class JobManager(
                   }
                 },
                 context.dispatcher)
+            }
 
-            case None =>
-              log.info(s"No job found with ID $jobId.")
-              sender ! decorateMessage(
-                CancellationFailure(
-                  jobId,
-                  new IllegalArgumentException(s"No job found with ID $jobId."))
-              )
-          }
+          case None =>
+            log.info(s"No job found with ID $jobId.")
+            sender ! decorateMessage(
+              CancellationFailure(
+                jobId,
+                new IllegalArgumentException(s"No job found with ID $jobId."))
+            )
         }
       } catch {
         case t: Throwable =>
@@ -745,25 +754,28 @@ class JobManager(
         case Some((graph, _)) =>
           val checkpointCoordinator = graph.getCheckpointCoordinator()
 
-          if (checkpointCoordinator != null) {
+          if (checkpointCoordinator == null) {
+            sender ! decorateMessage(TriggerSavepointFailure(jobId, new IllegalStateException(
+              s"Job $jobId is not a streaming job.")))
+          }
+          else if (savepointDirectory.isEmpty &&
+                !checkpointCoordinator.getCheckpointStorage.hasDefaultSavepointLocation) {
+            log.info(s"Trying to trigger a savepoint, but no savepoint directory configured.")
+
+            sender ! decorateMessage(TriggerSavepointFailure(jobId, new IllegalStateException(
+              "No savepoint directory configured. You can either specify a directory " +
+                "when triggering the savepoint via -s :targetDirectory or configure a " +
+                "cluster-/application-wide default via key '" +
+                CheckpointingOptions.SAVEPOINT_DIRECTORY.key() + "'.")))
+          } else {
             // Immutable copy for the future
             val senderRef = sender()
             try {
-              val targetDirectory : String = savepointDirectory.getOrElse(
-                flinkConfiguration.getString(CoreOptions.SAVEPOINT_DIRECTORY))
-
-              if (targetDirectory == null) {
-                throw new IllegalStateException("No savepoint directory configured. " +
-                  "You can either specify a directory when triggering this savepoint or " +
-                  "configure a cluster-wide default via key '" +
-                  CoreOptions.SAVEPOINT_DIRECTORY.key() + "'.")
-              }
-
               // Do this async, because checkpoint coordinator operations can
               // contain blocking calls to the state backend or ZooKeeper.
               val savepointFuture = checkpointCoordinator.triggerSavepoint(
                 System.currentTimeMillis(),
-                targetDirectory)
+                savepointDirectory.orNull)
 
               savepointFuture.handleAsync[Void](
                 new BiFunction[CompletedCheckpoint, Throwable, Void] {
@@ -793,10 +805,6 @@ class JobManager(
                 senderRef ! TriggerSavepointFailure(jobId, new Exception(
                   "Failed to trigger savepoint", e))
             }
-          } else {
-            sender() ! TriggerSavepointFailure(jobId, new IllegalStateException(
-              "Checkpointing disabled. You can enable it via the execution environment of " +
-                "your job."))
           }
 
         case None =>
@@ -808,19 +816,13 @@ class JobManager(
       future {
         try {
           log.info(s"Disposing savepoint at '$savepointPath'.")
-          //TODO user code class loader ?
-          // (has not been used so far and new savepoints can simply be deleted by file)
-          val savepoint = SavepointStore.loadSavepoint(
-            savepointPath,
-            Thread.currentThread().getContextClassLoader)
 
-          log.debug(s"$savepoint")
+          // there is a corner case issue with Flink 1.1 savepoints, which may contain
+          // user-defined state handles. however, it should work for all the standard cases,
+          // where the mem/fs/rocks state backends were used
+          val classLoader = Thread.currentThread().getContextClassLoader
 
-          // Dispose checkpoint state
-          savepoint.dispose()
-
-          // Remove the header file
-          SavepointStore.removeSavepointFile(savepointPath)
+          Checkpoints.disposeSavepoint(savepointPath, flinkConfiguration, classLoader, log.logger)
 
           senderRef ! DisposeSavepointSuccess
         } catch {
@@ -1249,15 +1251,15 @@ class JobManager(
           throw new JobSubmissionException(jobId, "The given job is empty")
         }
 
-        val restartStrategy =
-          Option(jobGraph.getSerializedExecutionConfig()
-            .deserializeValue(userCodeLoader)
-            .getRestartStrategy())
-            .map(RestartStrategyFactory.createRestartStrategy)
-            .filter(p => p != null) match {
-            case Some(strategy) => strategy
-            case None => restartStrategyFactory.createRestartStrategy()
-          }
+        val restartStrategyConfiguration = jobGraph
+          .getSerializedExecutionConfig
+          .deserializeValue(userCodeLoader)
+          .getRestartStrategy
+
+        val restartStrategy = RestartStrategyResolving
+          .resolve(restartStrategyConfiguration,
+            restartStrategyFactory,
+            jobGraph.isCheckpointingEnabled)
 
         log.info(s"Using restart strategy $restartStrategy for $jobId.")
 
@@ -1275,6 +1277,9 @@ class JobManager(
             true
         }
 
+        val allocationTimeout: Long = flinkConfiguration.getLong(
+          JobManagerOptions.SLOT_REQUEST_TIMEOUT)
+
         executionGraph = ExecutionGraphBuilder.buildGraph(
           executionGraph,
           jobGraph,
@@ -1289,6 +1294,7 @@ class JobManager(
           jobMetrics,
           numSlots,
           blobServer,
+          Time.milliseconds(allocationTimeout),
           log.logger)
         
         if (registerNewGraph) {
@@ -1313,7 +1319,7 @@ class JobManager(
           log.error(s"Failed to submit job $jobId ($jobName)", t)
 
           libraryCacheManager.unregisterJob(jobId)
-          blobServer.cleanupJob(jobId)
+          blobServer.cleanupJob(jobId, true)
           currentJobs.remove(jobId)
 
           if (executionGraph != null) {
@@ -1377,7 +1383,8 @@ class JobManager(
           jobInfo.notifyClients(
             decorateMessage(JobSubmitSuccess(jobGraph.getJobID)))
 
-          if (leaderElectionService.hasLeadership) {
+          if (leaderSessionID.isDefined &&
+            leaderElectionService.hasLeadership(leaderSessionID.get)) {
             // There is a small chance that multiple job managers schedule the same job after if
             // they try to recover at the same time. This will eventually be noticed, but can not be
             // ruled out from the beginning.
@@ -1719,41 +1726,47 @@ class JobManager(
    */
   private def removeJob(jobID: JobID, removeJobFromStateBackend: Boolean): Option[Future[Unit]] = {
     // Don't remove the job yet...
-    val futureOption = currentJobs.get(jobID) match {
+    val futureOption = currentJobs.remove(jobID) match {
       case Some((eg, _)) =>
-        val result = if (removeJobFromStateBackend) {
-          val futureOption = Some(future {
-            try {
+        val cleanUpFuture: Future[Unit] = Future {
+          val cleanupHABlobs = try {
+            if (removeJobFromStateBackend) {
               // ...otherwise, we can have lingering resources when there is a  concurrent shutdown
               // and the ZooKeeper client is closed. Not removing the job immediately allow the
               // shutdown to release all resources.
               submittedJobGraphs.removeJobGraph(jobID)
-            } catch {
-              case t: Throwable => log.warn(s"Could not remove submitted job graph $jobID.", t)
+              true
+            } else {
+              submittedJobGraphs.releaseJobGraph(jobID)
+              false
             }
-          }(context.dispatcher))
+          } catch {
+            case t: Throwable => {
+              log.warn(s"Could not remove submitted job graph $jobID.", t)
+              false
+            }
+          }
 
+          blobServer.cleanupJob(jobID, cleanupHABlobs)
+          ()
+        }(context.dispatcher)
+
+        if (removeJobFromStateBackend) {
           try {
-            archive ! decorateMessage(ArchiveExecutionGraph(jobID, eg.archive()))
+            archive ! decorateMessage(
+              ArchiveExecutionGraph(
+                jobID,
+                ArchivedExecutionGraph.createFrom(eg)))
           } catch {
             case t: Throwable => log.warn(s"Could not archive the execution graph $eg.", t)
           }
-
-          futureOption
-        } else {
-          None
         }
 
-        currentJobs.remove(jobID)
-
-        result
+        Option(cleanUpFuture)
       case None => None
     }
 
-    // remove all job-related BLOBs from local and HA store
     libraryCacheManager.unregisterJob(jobID)
-    blobServer.cleanupJob(jobID)
-
     jobManagerMetricGroup.removeJob(jobID)
 
     futureOption
@@ -1766,18 +1779,23 @@ class JobManager(
     */
   private def cancelAndClearEverything(cause: Throwable)
     : Seq[Future[Unit]] = {
-    val futures = for ((jobID, (eg, jobInfo)) <- currentJobs) yield {
-      future {
-        eg.suspend(cause)
+
+    val futures = currentJobs.values.flatMap(
+      egJobInfo => {
+        val executionGraph = egJobInfo._1
+        val jobInfo = egJobInfo._2
+
+        executionGraph.suspend(cause)
+
+        val jobId = executionGraph.getJobID
 
         jobInfo.notifyNonDetachedClients(
           decorateMessage(
             Failure(
-              new JobExecutionException(jobID, "All jobs are cancelled and cleared.", cause))))
-      }(context.dispatcher)
-    }
+              new JobExecutionException(jobId, "All jobs are cancelled and cleared.", cause))))
 
-    currentJobs.clear()
+        removeJob(jobId, false)
+      })
 
     futures.toSeq
   }
@@ -1855,7 +1873,10 @@ class JobManager(
       FiniteDuration(10, SECONDS)).start()
 
     // Shutdown and discard all queued messages
-    context.system.shutdown()
+    context.system.terminate().onComplete {
+      case scala.util.Success(_) =>
+      case scala.util.Failure(t) => log.warn("Could not cleanly shut down actor system", t)
+    }(directExecutionContext())
   }
 
   private def instantiateMetrics(jobManagerMetricGroup: MetricGroup) : Unit = {
@@ -2034,7 +2055,7 @@ object JobManager {
     }
 
     // block until everything is shut down
-    jobManagerSystem.awaitTermination()
+    Await.ready(jobManagerSystem.whenTerminated, Duration.Inf)
 
     webMonitorOption.foreach{
       webMonitor =>
@@ -2054,7 +2075,7 @@ object JobManager {
     }
 
     try {
-      metricRegistry.shutdown()
+      metricRegistry.shutdown().get()
     } catch {
       case t: Throwable =>
         LOG.warn("Could not properly shut down the metric registry.", t)
@@ -2127,7 +2148,6 @@ object JobManager {
       configuration: Configuration,
       externalHostname: String,
       port: Int): ActorSystem = {
-
     // Bring up the job manager actor system first, bind it to the given address.
     val jobManagerSystem = BootstrapTools.startActorSystem(
       configuration,
@@ -2276,11 +2296,10 @@ object JobManager {
     catch {
       case t: Throwable =>
         LOG.error("Error while starting up JobManager", t)
-        try {
-          jobManagerSystem.shutdown()
-        } catch {
-          case tt: Throwable => LOG.warn("Could not cleanly shut down actor system", tt)
-        }
+        jobManagerSystem.terminate().onComplete {
+          case scala.util.Success(_) =>
+          case scala.util.Failure(tt) => LOG.warn("Could not cleanly shut down actor system", tt)
+        }(directExecutionContext())
         throw t
     }
   }
@@ -2430,9 +2449,8 @@ object JobManager {
     val timeout: FiniteDuration = AkkaUtils.getTimeout(configuration)
 
     val classLoaderResolveOrder = configuration.getString(CoreOptions.CLASSLOADER_RESOLVE_ORDER)
-    val alwaysParentFirstLoaderString =
-      configuration.getString(CoreOptions.ALWAYS_PARENT_FIRST_LOADER)
-    val alwaysParentFirstLoaderPatterns = alwaysParentFirstLoaderString.split(';')
+
+    val alwaysParentFirstLoaderPatterns = CoreOptions.getParentFirstLoaderPatterns(configuration)
 
     val restartStrategy = RestartStrategyFactory.createRestartStrategyFactory(configuration)
 
@@ -2508,7 +2526,8 @@ object JobManager {
 
     val jobManagerMetricGroup = MetricUtils.instantiateJobManagerMetricGroup(
       metricRegistry,
-      configuration.getString(JobManagerOptions.ADDRESS))
+      configuration.getString(JobManagerOptions.ADDRESS),
+      ConfigurationUtils.getSystemResourceMetricsProbingInterval(configuration))
 
     (instanceManager,
       scheduler,

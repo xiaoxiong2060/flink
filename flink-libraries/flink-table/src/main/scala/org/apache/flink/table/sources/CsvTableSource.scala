@@ -115,7 +115,7 @@ class CsvTableSource private (
   }
 
   if (fieldNames.length != fieldTypes.length) {
-    throw TableException("Number of field names and field types must be equal.")
+    throw new TableException("Number of field names and field types must be equal.")
   }
 
   private val selectedFieldTypes = selectedFields.map(fieldTypes(_))
@@ -130,7 +130,7 @@ class CsvTableSource private (
     *       Do not use it in Table API programs.
     */
   override def getDataSet(execEnv: ExecutionEnvironment): DataSet[Row] = {
-    execEnv.createInput(createCsvInput(), returnType)
+    execEnv.createInput(createCsvInput(), returnType).name(explainSource())
   }
 
   /** Returns the [[RowTypeInfo]] for the return type of the [[CsvTableSource]]. */
@@ -143,7 +143,7 @@ class CsvTableSource private (
     *       Do not use it in Table API programs.
     */
   override def getDataStream(streamExecEnv: StreamExecutionEnvironment): DataStream[Row] = {
-    streamExecEnv.createInput(createCsvInput(), returnType)
+    streamExecEnv.createInput(createCsvInput(), returnType).name(explainSource())
   }
 
   /** Returns the schema of the produced table. */
@@ -153,7 +153,6 @@ class CsvTableSource private (
   override def projectFields(fields: Array[Int]): CsvTableSource = {
 
     val selectedFields = if (fields.isEmpty) Array(0) else fields
-//    val selectedFiels = fields
 
     new CsvTableSource(
       path,
@@ -271,7 +270,7 @@ object CsvTableSource {
     /**
       * Adds a field with the field name and the type information. Required.
       * This method can be called multiple times. The call order of this method defines
-      * also the order of thee fields in a row.
+      * also the order of the fields in a row.
       *
       * @param fieldName the field name
       * @param fieldType the type information of the field

@@ -22,10 +22,12 @@ import org.apache.flink.api.common.JobID;
 import org.apache.flink.runtime.execution.CancelTaskException;
 import org.apache.flink.runtime.io.disk.iomanager.IOManager;
 import org.apache.flink.runtime.io.network.TaskEventDispatcher;
+import org.apache.flink.runtime.io.network.buffer.BufferBuilder;
 import org.apache.flink.runtime.io.network.buffer.BufferPool;
 import org.apache.flink.runtime.io.network.buffer.BufferProvider;
 import org.apache.flink.runtime.io.network.buffer.NetworkBufferPool;
 import org.apache.flink.runtime.io.network.partition.BufferAvailabilityListener;
+import org.apache.flink.runtime.io.network.partition.NoOpResultPartitionConsumableNotifier;
 import org.apache.flink.runtime.io.network.partition.PartitionNotFoundException;
 import org.apache.flink.runtime.io.network.partition.ResultPartition;
 import org.apache.flink.runtime.io.network.partition.ResultPartitionConsumableNotifier;
@@ -48,8 +50,10 @@ import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.concurrent.Callable;
@@ -59,7 +63,9 @@ import java.util.concurrent.Future;
 
 import scala.Tuple2;
 
+import static org.apache.flink.util.FutureUtil.waitForAll;
 import static org.apache.flink.util.Preconditions.checkArgument;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.fail;
 import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.anyInt;
@@ -70,12 +76,15 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+/**
+ * Tests for the {@link LocalInputChannel}.
+ */
 public class LocalInputChannelTest {
 
 	/**
 	 * Tests the consumption of multiple subpartitions via local input channels.
 	 *
-	 * <p> Multiple producer tasks produce pipelined partitions, which are consumed by multiple
+	 * <p>Multiple producer tasks produce pipelined partitions, which are consumed by multiple
 	 * tasks via local input channels.
 	 */
 	@Test
@@ -97,8 +106,7 @@ public class LocalInputChannelTest {
 			(parallelism * producerBufferPoolSize) + (parallelism * parallelism),
 			TestBufferFactory.BUFFER_SIZE);
 
-		final ResultPartitionConsumableNotifier partitionConsumableNotifier =
-			mock(ResultPartitionConsumableNotifier.class);
+		final ResultPartitionConsumableNotifier partitionConsumableNotifier = new NoOpResultPartitionConsumableNotifier();
 
 		final TaskActions taskActions = mock(TaskActions.class);
 
@@ -170,10 +178,7 @@ public class LocalInputChannelTest {
 						partitionIds)));
 			}
 
-			// Wait for all to finish
-			for (Future<?> result : results) {
-				result.get();
-			}
+			waitForAll(60_000L, results);
 		}
 		finally {
 			networkBuffers.destroyAllBufferPools();
@@ -264,20 +269,22 @@ public class LocalInputChannelTest {
 	 * Verifies that concurrent release via the SingleInputGate and re-triggering
 	 * of a partition request works smoothly.
 	 *
-	 * - SingleInputGate acquires its request lock and tries to release all
+	 * <ul>
+	 * <li>SingleInputGate acquires its request lock and tries to release all
 	 * registered channels. When releasing a channel, it needs to acquire
-	 * the channel's shared request-release lock.
-	 * - If a LocalInputChannel concurrently retriggers a partition request via
+	 * the channel's shared request-release lock.</li>
+	 * <li>If a LocalInputChannel concurrently retriggers a partition request via
 	 * a Timer Thread it acquires the channel's request-release lock and calls
 	 * the retrigger callback on the SingleInputGate, which again tries to
-	 * acquire the gate's request lock.
+	 * acquire the gate's request lock.</li>
+	 * </ul>
 	 *
-	 * For certain timings this obviously leads to a deadlock. This test reliably
+	 * <p>For certain timings this obviously leads to a deadlock. This test reliably
 	 * reproduced such a timing (reported in FLINK-5228). This test is pretty much
 	 * testing the buggy implementation and has not much more general value. If it
 	 * becomes obsolete at some point (future greatness ;)), feel free to remove it.
 	 *
-	 * The fix in the end was to to not acquire the channels lock when releasing it
+	 * <p>The fix in the end was to to not acquire the channels lock when releasing it
 	 * and/or not doing any input gate callbacks while holding the channel's lock.
 	 * I decided to do both.
 	 */
@@ -291,7 +298,8 @@ public class LocalInputChannelTest {
 			0,
 			1,
 			mock(TaskActions.class),
-			UnregisteredMetricGroups.createUnregisteredTaskMetricGroup().getIOMetricGroup()
+			UnregisteredMetricGroups.createUnregisteredTaskMetricGroup().getIOMetricGroup(),
+			true
 		);
 
 		ResultPartitionManager partitionManager = mock(ResultPartitionManager.class);
@@ -360,9 +368,9 @@ public class LocalInputChannelTest {
 		ResultPartitionManager partitionManager = mock(ResultPartitionManager.class);
 
 		when(partitionManager.createSubpartitionView(
-				any(ResultPartitionID.class),
-				anyInt(),
-				any(BufferAvailabilityListener.class))).thenReturn(reader);
+			any(ResultPartitionID.class),
+			anyInt(),
+			any(BufferAvailabilityListener.class))).thenReturn(reader);
 
 		LocalInputChannel channel = new LocalInputChannel(
 			gate,
@@ -378,11 +386,7 @@ public class LocalInputChannelTest {
 		when(reader.getNextBuffer()).thenReturn(null);
 		when(reader.isReleased()).thenReturn(false);
 
-		try {
-			channel.getNextBuffer();
-			fail("Did not throw expected IllegalStateException");
-		} catch (IllegalStateException ignored) {
-		}
+		assertFalse(channel.getNextBuffer().isPresent());
 
 		// Null buffer and released
 		when(reader.getNextBuffer()).thenReturn(null);
@@ -393,6 +397,9 @@ public class LocalInputChannelTest {
 			fail("Did not throw expected CancelTaskException");
 		} catch (CancelTaskException ignored) {
 		}
+
+		channel.releaseAllResources();
+		assertFalse(channel.getNextBuffer().isPresent());
 	}
 
 	// ---------------------------------------------------------------------------------------------
@@ -444,11 +451,13 @@ public class LocalInputChannelTest {
 		}
 
 		@Override
-		public BufferOrEvent getNextBufferOrEvent() throws Exception {
+		public BufferConsumerAndChannel getNextBufferConsumer() throws Exception {
 			if (channelIndexes.size() > 0) {
 				final int channelIndex = channelIndexes.remove(0);
-
-				return new BufferOrEvent(bufferProvider.requestBufferBlocking(), channelIndex);
+				BufferBuilder bufferBuilder = bufferProvider.requestBufferBuilderBlocking();
+				bufferBuilder.appendAndCommit(ByteBuffer.wrap(new byte[4]));
+				bufferBuilder.finish();
+				return new BufferConsumerAndChannel(bufferBuilder.createBufferConsumer(), channelIndex);
 			}
 
 			return null;
@@ -487,7 +496,8 @@ public class LocalInputChannelTest {
 					subpartitionIndex,
 					numberOfInputChannels,
 					mock(TaskActions.class),
-					UnregisteredMetricGroups.createUnregisteredTaskMetricGroup().getIOMetricGroup());
+					UnregisteredMetricGroups.createUnregisteredTaskMetricGroup().getIOMetricGroup(),
+					true);
 
 			// Set buffer pool
 			inputGate.setBufferPool(bufferPool);
@@ -515,17 +525,17 @@ public class LocalInputChannelTest {
 			final int[] numberOfBuffersPerChannel = new int[numberOfInputChannels];
 
 			try {
-				BufferOrEvent boe;
-				while ((boe = inputGate.getNextBufferOrEvent()) != null) {
-					if (boe.isBuffer()) {
-						boe.getBuffer().recycle();
+				Optional<BufferOrEvent> boe;
+				while ((boe = inputGate.getNextBufferOrEvent()).isPresent()) {
+					if (boe.get().isBuffer()) {
+						boe.get().getBuffer().recycleBuffer();
 
 						// Check that we don't receive too many buffers
-						if (++numberOfBuffersPerChannel[boe.getChannelIndex()]
+						if (++numberOfBuffersPerChannel[boe.get().getChannelIndex()]
 								> numberOfExpectedBuffersPerChannel) {
 
 							throw new IllegalStateException("Received more buffers than expected " +
-									"on channel " + boe.getChannelIndex() + ".");
+									"on channel " + boe.get().getChannelIndex() + ".");
 						}
 					}
 				}

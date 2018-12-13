@@ -24,7 +24,7 @@ import org.apache.flink.api.scala._
 import org.apache.flink.api.scala.util.CollectionDataSets
 import org.apache.flink.table.api.scala._
 import org.apache.flink.table.api.{TableEnvironment, Types, ValidationException}
-import org.apache.flink.table.expressions.utils.{Func1, Func18, RichFunc2}
+import org.apache.flink.table.expressions.utils.{Func1, Func18, Func20, RichFunc2}
 import org.apache.flink.table.runtime.utils.JavaUserDefinedTableFunctions.JavaTableFunc0
 import org.apache.flink.table.runtime.utils.TableProgramsTestBase.TableConfigMode
 import org.apache.flink.table.runtime.utils.{TableProgramsClusterTestBase, _}
@@ -71,6 +71,21 @@ class CorrelateITCase(
   def testLeftOuterJoinWithoutPredicates(): Unit = {
     val env = ExecutionEnvironment.getExecutionEnvironment
     val tableEnv = TableEnvironment.getTableEnvironment(env, config)
+    val in = testData(env).toTable(tableEnv).as('a, 'b, 'c)
+
+    val func2 = new TableFunc2
+    val result = in.leftOuterJoin(func2('c) as ('s, 'l)).select('c, 's, 'l).toDataSet[Row]
+    val results = result.collect()
+    val expected = "Jack#22,Jack,4\n" + "Jack#22,22,2\n" + "John#19,John,4\n" +
+      "John#19,19,2\n" + "Anna#44,Anna,4\n" + "Anna#44,44,2\n" + "nosharp,null,null"
+    TestBaseUtils.compareResultAsText(results.asJava, expected)
+  }
+
+  @Test
+  def testLeftOuterJoinWithSplit(): Unit = {
+    val env = ExecutionEnvironment.getExecutionEnvironment
+    val tableEnv = TableEnvironment.getTableEnvironment(env, config)
+    tableEnv.getConfig.setMaxGeneratedCodeLength(1) // split every field
     val in = testData(env).toTable(tableEnv).as('a, 'b, 'c)
 
     val func2 = new TableFunc2
@@ -350,6 +365,33 @@ class CorrelateITCase(
       .join(varArgsFunc0())
     val results0 = result0.toDataSet[Row].collect()
     assertTrue(results0.isEmpty)
+  }
+
+  @Test
+  def testTableFunctionCollectorOpenClose(): Unit = {
+    val env = ExecutionEnvironment.getExecutionEnvironment
+    val tableEnv = TableEnvironment.getTableEnvironment(env, config)
+    val t = testData(env).toTable(tableEnv).as('a, 'b, 'c)
+    val func0 = new TableFunc0
+    val func20 = new Func20
+
+    val result = t
+      .join(func0('c) as('d, 'e))
+      .where(func20('e))
+      .select('c, 'd, 'e)
+
+    val results = result.toDataSet[Row].collect()
+
+    val expected = Seq (
+      "Jack#22,Jack,22",
+      "John#19,John,19",
+      "Anna#44,Anna,44"
+    )
+
+    TestBaseUtils.compareResultAsText(
+      results.asJava,
+      expected.sorted.mkString("\n")
+    )
   }
 
   private def testData(

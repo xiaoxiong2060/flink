@@ -30,7 +30,7 @@ under the License.
 This connector provides sinks that writes data into a [Apache Cassandra](https://cassandra.apache.org/) database.
 
 <!--
-  TODO: Perhaps worth mentioning current DataStax Java Driver version to match Cassandra versoin on user side.
+  TODO: Perhaps worth mentioning current DataStax Java Driver version to match Cassandra version on user side.
 -->
 
 To use this connector, add the following dependency to your project:
@@ -75,7 +75,10 @@ The following configuration methods can be used:
 5. _enableWriteAheadLog([CheckpointCommitter committer])_
     * An __optional__ setting
     * Allows exactly-once processing for non-deterministic algorithms.
-6. _build()_
+6. _setFailureHandler([CassandraFailureHandler failureHandler])_
+    * An __optional__ setting
+    * Sets the custom failure handler.
+7. _build()_
     * Finalizes the configuration and constructs the CassandraSink instance.
 
 ### Write-ahead Log

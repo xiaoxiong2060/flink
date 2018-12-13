@@ -21,6 +21,7 @@ package org.apache.flink.table.plan.rules
 import org.apache.calcite.rel.core.RelFactories
 import org.apache.calcite.rel.rules._
 import org.apache.calcite.tools.{RuleSet, RuleSets}
+import org.apache.flink.table.plan.nodes.logical
 import org.apache.flink.table.plan.rules.common._
 import org.apache.flink.table.plan.rules.logical._
 import org.apache.flink.table.plan.rules.dataSet._
@@ -38,10 +39,14 @@ object FlinkRuleSets {
     SubQueryRemoveRule.JOIN)
 
   /**
-    * Convert table references before query decorrelation.
+    * Expand plan by replacing references to tables into a proper plan sub trees. Those rules
+    * can create new plan nodes.
     */
-  val TABLE_REF_RULES: RuleSet = RuleSets.ofList(
-    TableScanRule.INSTANCE,
+  val EXPAND_PLAN_RULES: RuleSet = RuleSets.ofList(
+    LogicalCorrelateToTemporalTableJoinRule.INSTANCE,
+    TableScanRule.INSTANCE)
+
+  val POST_EXPAND_CLEAN_UP_RULES: RuleSet = RuleSets.ofList(
     EnumerableToLogicalTableScan.INSTANCE)
 
   val LOGICAL_OPT_RULES: RuleSet = RuleSets.ofList(
@@ -88,11 +93,10 @@ object FlinkRuleSets {
     AggregateJoinTransposeRule.EXTENDED,
     // aggregate union rule
     AggregateUnionAggregateRule.INSTANCE,
-    // expand distinct aggregate to normal aggregate with groupby
-    AggregateExpandDistinctAggregatesRule.JOIN,
 
     // reduce aggregate functions like AVG, STDDEV_POP etc.
     AggregateReduceFunctionsRule.INSTANCE,
+    WindowAggregateReduceFunctionsRule.INSTANCE,
 
     // remove unnecessary sort rule
     SortRemoveRule.INSTANCE,
@@ -128,15 +132,16 @@ object FlinkRuleSets {
     FlinkLogicalCorrelate.CONVERTER,
     FlinkLogicalIntersect.CONVERTER,
     FlinkLogicalJoin.CONVERTER,
+    FlinkLogicalTemporalTableJoin.CONVERTER,
     FlinkLogicalMinus.CONVERTER,
     FlinkLogicalSort.CONVERTER,
     FlinkLogicalUnion.CONVERTER,
     FlinkLogicalValues.CONVERTER,
     FlinkLogicalTableSourceScan.CONVERTER,
     FlinkLogicalTableFunctionScan.CONVERTER,
-    FlinkLogicalNativeTableScan.CONVERTER
+    FlinkLogicalNativeTableScan.CONVERTER,
+    FlinkLogicalMatch.CONVERTER
   )
-
 
   /**
     * RuleSet to normalize plans for batch / DataSet execution
@@ -154,7 +159,14 @@ object FlinkRuleSets {
     // Transform window to LogicalWindowAggregate
     DataSetLogicalWindowAggregateRule.INSTANCE,
     WindowPropertiesRule.INSTANCE,
-    WindowPropertiesHavingRule.INSTANCE
+    WindowPropertiesHavingRule.INSTANCE,
+
+    // expand distinct aggregate to normal aggregate with groupby
+    AggregateExpandDistinctAggregatesRule.JOIN,
+
+    // merge a cascade of predicates to IN or NOT_IN
+    ConvertToNotInOrInRule.IN_INSTANCE,
+    ConvertToNotInOrInRule.NOT_IN_INSTANCE
   )
 
   /**
@@ -164,7 +176,6 @@ object FlinkRuleSets {
     // translate to Flink DataSet nodes
     DataSetWindowAggregateRule.INSTANCE,
     DataSetAggregateRule.INSTANCE,
-    DataSetAggregateWithNullValuesRule.INSTANCE,
     DataSetDistinctRule.INSTANCE,
     DataSetCalcRule.INSTANCE,
     DataSetJoinRule.INSTANCE,
@@ -192,7 +203,11 @@ object FlinkRuleSets {
     ReduceExpressionsRule.FILTER_INSTANCE,
     ReduceExpressionsRule.PROJECT_INSTANCE,
     ReduceExpressionsRule.CALC_INSTANCE,
-    ProjectToWindowRule.PROJECT
+    ProjectToWindowRule.PROJECT,
+
+    // merge a cascade of predicates to IN or NOT_IN
+    ConvertToNotInOrInRule.IN_INSTANCE,
+    ConvertToNotInOrInRule.NOT_IN_INSTANCE
   )
 
   /**
@@ -210,7 +225,10 @@ object FlinkRuleSets {
     DataStreamValuesRule.INSTANCE,
     DataStreamCorrelateRule.INSTANCE,
     DataStreamWindowJoinRule.INSTANCE,
-    StreamTableSourceScanRule.INSTANCE
+    DataStreamJoinRule.INSTANCE,
+    DataStreamTemporalTableJoinRule.INSTANCE,
+    StreamTableSourceScanRule.INSTANCE,
+    DataStreamMatchRule.INSTANCE
   )
 
   /**
