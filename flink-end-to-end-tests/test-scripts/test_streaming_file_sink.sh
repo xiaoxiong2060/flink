@@ -22,7 +22,9 @@ OUT_TYPE="${1:-local}" # other type: s3
 source "$(dirname "$0")"/common.sh
 source "$(dirname "$0")"/common_s3.sh
 
+s3_setup hadoop
 set_conf_ssl "mutual"
+set_conf "metrics.fetcher.update-interval" "2000"
 
 OUT=temp/test_streaming_file_sink-$(uuidgen)
 OUTPUT_PATH="$TEST_DATA_DIR/$OUT"

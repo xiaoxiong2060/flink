@@ -17,9 +17,19 @@
 # limitations under the License.
 ################################################################################
 
+echo $M2_HOME
+echo $PATH
+echo $MAVEN_OPTS
+
+mvn -version
+
+echo "Commit: $(git rev-parse HEAD)"
+
 CACHE_DIR="$HOME/flink_cache"
 CACHE_BUILD_DIR="$CACHE_DIR/$TRAVIS_BUILD_NUMBER"
 CACHE_FLINK_DIR="$CACHE_BUILD_DIR/flink"
+
+echo "Flink cache location: ${CACHE_FLINK_DIR}"
 
 HERE="`dirname \"$0\"`"				# relative
 HERE="`( cd \"$HERE\" && pwd )`" 	# absolutized and normalized

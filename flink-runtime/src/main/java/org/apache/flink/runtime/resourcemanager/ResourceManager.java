@@ -202,31 +202,54 @@ public abstract class ResourceManager<WorkerType extends ResourceIDRetrievable>
 	// ------------------------------------------------------------------------
 
 	@Override
-	public void start() throws Exception {
-		// start a leader
-		super.start();
-
-		leaderElectionService = highAvailabilityServices.getResourceManagerLeaderElectionService();
-
-		initialize();
-
+	public void onStart() throws Exception {
 		try {
+			startResourceManagerServices();
+		} catch (Exception e) {
+			final ResourceManagerException exception = new ResourceManagerException(String.format("Could not start the ResourceManager %s", getAddress()), e);
+			onFatalError(exception);
+			throw exception;
+		}
+	}
+
+	private void startResourceManagerServices() throws Exception {
+		try {
+			leaderElectionService = highAvailabilityServices.getResourceManagerLeaderElectionService();
+
+			initialize();
+
 			leaderElectionService.start(this);
-		} catch (Exception e) {
-			throw new ResourceManagerException("Could not start the leader election service.", e);
-		}
-
-		try {
 			jobLeaderIdService.start(new JobLeaderIdActionsImpl());
+
+			registerSlotAndTaskExecutorMetrics();
 		} catch (Exception e) {
-			throw new ResourceManagerException("Could not start the job leader id service.", e);
+			handleStartResourceManagerServicesException(e);
+		}
+	}
+
+	private void handleStartResourceManagerServicesException(Exception e) throws Exception {
+		try {
+			stopResourceManagerServices();
+		} catch (Exception inner) {
+			e.addSuppressed(inner);
 		}
 
-		registerSlotAndTaskExecutorMetrics();
+		throw e;
 	}
 
 	@Override
-	public CompletableFuture<Void> postStop() {
+	public CompletableFuture<Void> onStop() {
+		try {
+			stopResourceManagerServices();
+		} catch (Exception exception) {
+			return FutureUtils.completedExceptionally(
+				new FlinkException("Could not properly shut down the ResourceManager.", exception));
+		}
+
+		return CompletableFuture.completedFuture(null);
+	}
+
+	private void stopResourceManagerServices() throws Exception {
 		Exception exception = null;
 
 		taskManagerHeartbeatManager.stop();
@@ -253,12 +276,7 @@ public abstract class ResourceManager<WorkerType extends ResourceIDRetrievable>
 
 		clearStateInternal();
 
-		if (exception != null) {
-			return FutureUtils.completedExceptionally(
-				new FlinkException("Could not properly shut down the ResourceManager.", exception));
-		} else {
-			return CompletableFuture.completedFuture(null);
-		}
+		ExceptionUtils.tryRethrowException(exception);
 	}
 
 	// ------------------------------------------------------------------------
@@ -314,17 +332,21 @@ public abstract class ResourceManager<WorkerType extends ResourceIDRetrievable>
 
 		CompletableFuture<RegistrationResponse> registrationResponseFuture = jobMasterGatewayFuture.thenCombineAsync(
 			jobMasterIdFuture,
-			(JobMasterGateway jobMasterGateway, JobMasterId currentJobMasterId) -> {
-				if (Objects.equals(currentJobMasterId, jobMasterId)) {
+			(JobMasterGateway jobMasterGateway, JobMasterId leadingJobMasterId) -> {
+				if (Objects.equals(leadingJobMasterId, jobMasterId)) {
 					return registerJobMasterInternal(
 						jobMasterGateway,
 						jobId,
 						jobManagerAddress,
 						jobManagerResourceId);
 				} else {
-					log.debug("The current JobMaster leader id {} did not match the received " +
-						"JobMaster id {}.", jobMasterId, currentJobMasterId);
-					return new RegistrationResponse.Decline("Job manager leader id did not match.");
+					final String declineMessage = String.format(
+						"The leading JobMaster id %s did not match the received JobMaster id %s. " +
+						"This indicates that a JobMaster leader change has happened.",
+						leadingJobMasterId,
+						jobMasterId);
+					log.debug(declineMessage);
+					return new RegistrationResponse.Decline(declineMessage);
 				}
 			},
 			getMainThreadExecutor());
@@ -1168,19 +1190,16 @@ public abstract class ResourceManager<WorkerType extends ResourceIDRetrievable>
 
 		@Override
 		public void notifyHeartbeatTimeout(final ResourceID resourceID) {
-			runAsync(new Runnable() {
-				@Override
-				public void run() {
-					log.info("The heartbeat of JobManager with id {} timed out.", resourceID);
+			runAsync(() -> {
+				log.info("The heartbeat of JobManager with id {} timed out.", resourceID);
 
-					if (jmResourceIdRegistrations.containsKey(resourceID)) {
-						JobManagerRegistration jobManagerRegistration = jmResourceIdRegistrations.get(resourceID);
+				if (jmResourceIdRegistrations.containsKey(resourceID)) {
+					JobManagerRegistration jobManagerRegistration = jmResourceIdRegistrations.get(resourceID);
 
-						if (jobManagerRegistration != null) {
-							closeJobManagerConnection(
-								jobManagerRegistration.getJobID(),
-								new TimeoutException("The heartbeat of JobManager with id " + resourceID + " timed out."));
-						}
+					if (jobManagerRegistration != null) {
+						closeJobManagerConnection(
+							jobManagerRegistration.getJobID(),
+							new TimeoutException("The heartbeat of JobManager with id " + resourceID + " timed out."));
 					}
 				}
 			});

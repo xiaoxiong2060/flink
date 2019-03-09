@@ -23,7 +23,7 @@ import org.apache.flink.api.common.time.Time;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.runtime.clusterframework.types.ResourceID;
 import org.apache.flink.runtime.concurrent.FutureUtils;
-import org.apache.flink.runtime.executiongraph.AccessExecutionGraph;
+import org.apache.flink.runtime.executiongraph.ArchivedExecutionGraph;
 import org.apache.flink.runtime.jobgraph.JobStatus;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
 import org.apache.flink.runtime.jobmaster.JobResult;
@@ -48,7 +48,7 @@ public class TestingRestfulGateway implements RestfulGateway {
 	static final Function<JobID, CompletableFuture<Acknowledge>> DEFAULT_CANCEL_JOB_FUNCTION = jobId -> CompletableFuture.completedFuture(Acknowledge.get());
 	static final Function<JobID, CompletableFuture<Acknowledge>> DEFAULT_STOP_JOB_FUNCTION = jobId -> CompletableFuture.completedFuture(Acknowledge.get());
 	static final Function<JobID, CompletableFuture<JobResult>> DEFAULT_REQUEST_JOB_RESULT_FUNCTION = jobId -> FutureUtils.completedExceptionally(new UnsupportedOperationException());
-	static final Function<JobID, CompletableFuture<? extends AccessExecutionGraph>> DEFAULT_REQUEST_JOB_FUNCTION = jobId -> FutureUtils.completedExceptionally(new UnsupportedOperationException());
+	static final Function<JobID, CompletableFuture<ArchivedExecutionGraph>> DEFAULT_REQUEST_JOB_FUNCTION = jobId -> FutureUtils.completedExceptionally(new UnsupportedOperationException());
 	static final Function<JobID, CompletableFuture<JobStatus>> DEFAULT_REQUEST_JOB_STATUS_FUNCTION = jobId -> FutureUtils.completedExceptionally(new UnsupportedOperationException());
 	static final Supplier<CompletableFuture<MultipleJobsDetails>> DEFAULT_REQUEST_MULTIPLE_JOB_DETAILS_SUPPLIER = () -> CompletableFuture.completedFuture(new MultipleJobsDetails(Collections.emptyList()));
 	static final Supplier<CompletableFuture<ClusterOverview>> DEFAULT_REQUEST_CLUSTER_OVERVIEW_SUPPLIER = () -> CompletableFuture.completedFuture(new ClusterOverview(0, 0, 0, 0, 0, 0, 0));
@@ -68,7 +68,7 @@ public class TestingRestfulGateway implements RestfulGateway {
 
 	protected Function<JobID, CompletableFuture<Acknowledge>> stopJobFunction;
 
-	protected Function<JobID, CompletableFuture<? extends AccessExecutionGraph>> requestJobFunction;
+	protected Function<JobID, CompletableFuture<ArchivedExecutionGraph>> requestJobFunction;
 
 	protected Function<JobID, CompletableFuture<JobResult>> requestJobResultFunction;
 
@@ -90,7 +90,6 @@ public class TestingRestfulGateway implements RestfulGateway {
 		this(
 			LOCALHOST,
 			LOCALHOST,
-			LOCALHOST,
 			DEFAULT_CANCEL_JOB_FUNCTION,
 			DEFAULT_STOP_JOB_FUNCTION,
 			DEFAULT_REQUEST_JOB_FUNCTION,
@@ -107,10 +106,9 @@ public class TestingRestfulGateway implements RestfulGateway {
 	public TestingRestfulGateway(
 			String address,
 			String hostname,
-			String restAddress,
 			Function<JobID, CompletableFuture<Acknowledge>> cancelJobFunction,
 			Function<JobID, CompletableFuture<Acknowledge>> stopJobFunction,
-			Function<JobID, CompletableFuture<? extends AccessExecutionGraph>> requestJobFunction,
+			Function<JobID, CompletableFuture<ArchivedExecutionGraph>> requestJobFunction,
 			Function<JobID, CompletableFuture<JobResult>> requestJobResultFunction,
 			Function<JobID, CompletableFuture<JobStatus>> requestJobStatusFunction,
 			Supplier<CompletableFuture<MultipleJobsDetails>> requestMultipleJobDetailsSupplier,
@@ -121,7 +119,6 @@ public class TestingRestfulGateway implements RestfulGateway {
 			BiFunction<JobID, String, CompletableFuture<String>> triggerSavepointFunction) {
 		this.address = address;
 		this.hostname = hostname;
-		this.restAddress = restAddress;
 		this.cancelJobFunction = cancelJobFunction;
 		this.stopJobFunction = stopJobFunction;
 		this.requestJobFunction = requestJobFunction;
@@ -146,12 +143,7 @@ public class TestingRestfulGateway implements RestfulGateway {
 	}
 
 	@Override
-	public CompletableFuture<String> requestRestAddress(Time timeout) {
-		return CompletableFuture.completedFuture(restAddress);
-	}
-
-	@Override
-	public CompletableFuture<? extends AccessExecutionGraph> requestJob(JobID jobId, Time timeout) {
+	public CompletableFuture<ArchivedExecutionGraph> requestJob(JobID jobId, Time timeout) {
 		return requestJobFunction.apply(jobId);
 	}
 
@@ -215,10 +207,9 @@ public class TestingRestfulGateway implements RestfulGateway {
 	public static class Builder {
 		protected String address = LOCALHOST;
 		protected String hostname = LOCALHOST;
-		protected String restAddress = LOCALHOST;
 		protected Function<JobID, CompletableFuture<Acknowledge>> cancelJobFunction;
 		protected Function<JobID, CompletableFuture<Acknowledge>> stopJobFunction;
-		protected Function<JobID, CompletableFuture<? extends AccessExecutionGraph>> requestJobFunction;
+		protected Function<JobID, CompletableFuture<ArchivedExecutionGraph>> requestJobFunction;
 		protected Function<JobID, CompletableFuture<JobResult>> requestJobResultFunction;
 		protected Function<JobID, CompletableFuture<JobStatus>> requestJobStatusFunction;
 		protected Supplier<CompletableFuture<MultipleJobsDetails>> requestMultipleJobDetailsSupplier;
@@ -253,12 +244,7 @@ public class TestingRestfulGateway implements RestfulGateway {
 			return this;
 		}
 
-		public Builder setRestAddress(String restAddress) {
-			this.restAddress = restAddress;
-			return this;
-		}
-
-		public Builder setRequestJobFunction(Function<JobID, CompletableFuture<? extends AccessExecutionGraph>> requestJobFunction) {
+		public Builder setRequestJobFunction(Function<JobID, CompletableFuture<ArchivedExecutionGraph>> requestJobFunction) {
 			this.requestJobFunction = requestJobFunction;
 			return this;
 		}
@@ -317,7 +303,6 @@ public class TestingRestfulGateway implements RestfulGateway {
 			return new TestingRestfulGateway(
 				address,
 				hostname,
-				restAddress,
 				cancelJobFunction,
 				stopJobFunction,
 				requestJobFunction,

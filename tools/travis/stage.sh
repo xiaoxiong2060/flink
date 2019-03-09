@@ -39,8 +39,6 @@ flink-streaming-java,\
 flink-streaming-scala"
 
 MODULES_LIBRARIES="\
-flink-contrib/flink-storm,\
-flink-contrib/flink-storm-examples,\
 flink-libraries/flink-cep,\
 flink-libraries/flink-cep-scala,\
 flink-libraries/flink-gelly,\
@@ -49,7 +47,15 @@ flink-libraries/flink-gelly-examples,\
 flink-libraries/flink-ml,\
 flink-libraries/flink-python,\
 flink-libraries/flink-streaming-python,\
-flink-libraries/flink-table,\
+flink-table/flink-table-common,\
+flink-table/flink-table-api-java,\
+flink-table/flink-table-api-scala,\
+flink-table/flink-table-api-java-bridge,\
+flink-table/flink-table-api-scala-bridge,\
+flink-table/flink-table-planner,\
+flink-table/flink-table-planner-blink,\
+flink-table/flink-table-runtime-blink,\
+flink-table/flink-sql-client,\
 flink-queryable-state/flink-queryable-state-runtime,\
 flink-queryable-state/flink-queryable-state-client-java"
 
@@ -62,6 +68,8 @@ flink-filesystems/flink-s3-fs-hadoop,\
 flink-filesystems/flink-s3-fs-presto,\
 flink-formats/flink-avro,\
 flink-formats/flink-parquet,\
+flink-formats/flink-json,\
+flink-formats/flink-csv,\
 flink-connectors/flink-hbase,\
 flink-connectors/flink-hcatalog,\
 flink-connectors/flink-hadoop-compatibility,\
